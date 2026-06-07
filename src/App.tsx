@@ -173,6 +173,23 @@ const styles = `
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 24px; flex-wrap: wrap; }
   .toolbar-right { margin-left: auto; display: flex; gap: 8px; }
   .empty-state { text-align: center; padding: 60px 20px; color: var(--text3); }
+  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .inv-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+  .inv-table th { text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .inv-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .inv-table tr:last-child td { border-bottom: none; }
+  .inv-table tr:hover td { background: var(--bg3); }
+  .view-toggle { display: flex; background: var(--bg3); border-radius: 8px; padding: 2px; border: 1px solid var(--border); }
+  .view-toggle-btn { padding: 5px 10px; border-radius: 6px; border: none; background: none; color: var(--text3); cursor: pointer; font-size: 15px; transition: all 0.15s; }
+  .view-toggle-btn.active { background: var(--bg2); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+  .toolbar { flex-wrap: wrap; }
+  @media (max-width: 600px) {
+    .toolbar > * { flex-shrink: 0; }
+    .toolbar-right { width: 100%; justify-content: flex-end; }
+    .page-title { font-size: 26px; }
+    .inv-table { font-size: 12px; }
+    .inv-table th, .inv-table td { padding: 8px 10px; }
+  }
   .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
   .empty-title { font-size: 16px; color: var(--text2); margin-bottom: 8px; }
   .empty-desc { font-size: 13px; }
@@ -439,15 +456,37 @@ const LoginPage = ({ onToast }) => {
 };
 
 // ─── Rooms ────────────────────────────────────────────────────────────────────
+const RoomForm = ({ form, setForm }) => (
+  <>
+    <div className="form-group">
+      <label className="form-label">Nombre</label>
+      <input className="form-input" placeholder="Ej: Salón, Dormitorio..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
+    </div>
+    <div className="form-group">
+      <label className="form-label">Icono</label>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+        {ROOM_ICONS.map(ic => (
+          <span key={ic} onClick={()=>setForm(f=>({...f,icon:ic}))}
+            style={{fontSize:24,cursor:"pointer",padding:6,borderRadius:8,background:form.icon===ic?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${form.icon===ic?"var(--accent)":"var(--border)"}`}}>
+            {ic}
+          </span>
+        ))}
+      </div>
+    </div>
+  </>
+);
+
 const RoomsPage = ({ user, onToast, onNavigate }) => {
   const [rooms, setRooms] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [editRoom, setEditRoom] = useState(null);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name:"", icon:"🛋️" });
+  const [editForm, setEditForm] = useState({ name:"", icon:"🛋️" });
   const [furnitureCounts, setFurnitureCounts] = useState({});
 
   useEffect(() => {
-    const q = query(collection(db, "rooms"), orderBy("createdAt","asc"));
+    const q = query(collection(db, "rooms"), orderBy("order","asc"));
     const unsub = onSnapshot(q, async snap => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRooms(data); setLoading(false);
@@ -463,9 +502,17 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
 
   const handleAdd = async () => {
     if (!form.name.trim()) return;
-    await addDoc(collection(db,"rooms"), { name:form.name.trim(), icon:form.icon, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
+    const maxOrder = rooms.reduce((m,r)=>Math.max(m,r.order||0),0);
+    await addDoc(collection(db,"rooms"), { name:form.name.trim(), icon:form.icon, order:maxOrder+1, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
     await logHistory(user.uid, user.displayName, "Creó estancia", form.name.trim());
     onToast("Estancia creada"); setShowAdd(false); setForm({ name:"", icon:"🛋️" });
+  };
+
+  const handleEdit = async () => {
+    if (!editForm.name.trim()) return;
+    await updateDoc(doc(db,"rooms",editRoom.id), { name:editForm.name.trim(), icon:editForm.icon, updatedAt:serverTimestamp() });
+    await logHistory(user.uid, user.displayName, "Editó estancia", editForm.name.trim());
+    onToast("Estancia actualizada"); setEditRoom(null);
   };
 
   const handleDelete = async (room) => {
@@ -473,6 +520,17 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
     await deleteDoc(doc(db,"rooms",room.id));
     await logHistory(user.uid, user.displayName, "Eliminó estancia", room.name);
     onToast("Estancia eliminada");
+  };
+
+  const moveRoom = async (idx, dir) => {
+    const swapIdx = idx + dir;
+    if (swapIdx < 0 || swapIdx >= rooms.length) return;
+    const a = rooms[idx], b = rooms[swapIdx];
+    const ao = a.order ?? idx, bo = b.order ?? swapIdx;
+    await Promise.all([
+      updateDoc(doc(db,"rooms",a.id), { order: bo }),
+      updateDoc(doc(db,"rooms",b.id), { order: ao }),
+    ]);
   };
 
   if (loading) return <div className="loading-page"><div className="spinner"/></div>;
@@ -490,15 +548,20 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
         <div className="empty-state"><div className="empty-icon">🏠</div><div className="empty-title">Aún no hay estancias</div><div className="empty-desc">Crea tu primera habitación</div></div>
       ) : (
         <div className="grid-2">
-          {rooms.map(room => (
+          {rooms.map((room, idx) => (
             <div key={room.id} className="card card-clickable room-card" onClick={()=>onNavigate("furniture",room)}>
               <span className="room-count">{furnitureCounts[room.id]||0} muebles</span>
               <span className="room-icon">{room.icon}</span>
               <div className="room-name">{room.name}</div>
               <div className="room-meta">Por {room.createdByName} · {formatDate(room.createdAt)}</div>
-              <div style={{display:"flex",gap:8,marginTop:14}} onClick={e=>e.stopPropagation()}>
-                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("furniture",room)}>Ver muebles →</button>
+              <div style={{display:"flex",gap:6,marginTop:14,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("furniture",room)}>Ver →</button>
+                <button className="btn btn-ghost btn-sm" onClick={()=>{setEditForm({name:room.name,icon:room.icon});setEditRoom(room);}}>Editar</button>
                 <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(room)}>Eliminar</button>
+                <div style={{marginLeft:"auto",display:"flex",gap:4}}>
+                  <button className="btn-icon" style={{padding:"4px 8px",fontSize:12}} onClick={()=>moveRoom(idx,-1)} disabled={idx===0} title="Subir">↑</button>
+                  <button className="btn-icon" style={{padding:"4px 8px",fontSize:12}} onClick={()=>moveRoom(idx,1)} disabled={idx===rooms.length-1} title="Bajar">↓</button>
+                </div>
               </div>
             </div>
           ))}
@@ -506,24 +569,19 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
       )}
       {showAdd && (
         <Modal title="Nueva estancia" onClose={()=>setShowAdd(false)}>
-          <div className="form-group">
-            <label className="form-label">Nombre</label>
-            <input className="form-input" placeholder="Ej: Salón, Dormitorio..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Icono</label>
-            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {ROOM_ICONS.map(ic => (
-                <span key={ic} onClick={()=>setForm(f=>({...f,icon:ic}))}
-                  style={{fontSize:24,cursor:"pointer",padding:6,borderRadius:8,background:form.icon===ic?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${form.icon===ic?"var(--accent)":"var(--border)"}`}}>
-                  {ic}
-                </span>
-              ))}
-            </div>
-          </div>
+          <RoomForm form={form} setForm={setForm}/>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowAdd(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleAdd}>Crear estancia</button>
+          </div>
+        </Modal>
+      )}
+      {editRoom && (
+        <Modal title="Editar estancia" onClose={()=>setEditRoom(null)}>
+          <RoomForm form={editForm} setForm={setEditForm}/>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setEditRoom(null)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleEdit}>Guardar cambios</button>
           </div>
         </Modal>
       )}
@@ -532,11 +590,32 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
 };
 
 // ─── Furniture ────────────────────────────────────────────────────────────────
+const FurnitureForm = ({ form, setForm }) => (
+  <>
+    <div className="form-group">
+      <label className="form-label">Nombre</label>
+      <input className="form-input" placeholder="Ej: Armario grande, Cajón derecho..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
+    </div>
+    <div className="form-group">
+      <label className="form-label">Tipo</label>
+      <select className="form-input" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+        {FURNITURE_TYPES.map(t=><option key={t}>{t}</option>)}
+      </select>
+    </div>
+    <div className="form-group">
+      <label className="form-label">Descripción (opcional)</label>
+      <input className="form-input" placeholder="Ej: El de la derecha al entrar" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} />
+    </div>
+  </>
+);
+
 const FurniturePage = ({ user, room, onToast, onNavigate }) => {
   const [furniture, setFurniture] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [editFurniture, setEditFurniture] = useState(null);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name:"", type:"Armario", description:"" });
+  const [editForm, setEditForm] = useState({ name:"", type:"Armario", description:"" });
   const [itemCounts, setItemCounts] = useState({});
 
   useEffect(() => {
@@ -559,6 +638,13 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
     await addDoc(collection(db,"furniture"), { name:form.name.trim(), type:form.type, description:form.description, roomId:room.id, roomName:room.name, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
     await logHistory(user.uid, user.displayName, "Añadió mueble", `${form.name} en ${room.name}`);
     onToast("Mueble añadido"); setShowAdd(false); setForm({ name:"", type:"Armario", description:"" });
+  };
+
+  const handleEdit = async () => {
+    if (!editForm.name.trim()) return;
+    await updateDoc(doc(db,"furniture",editFurniture.id), { name:editForm.name.trim(), type:editForm.type, description:editForm.description, updatedAt:serverTimestamp() });
+    await logHistory(user.uid, user.displayName, "Editó mueble", editForm.name.trim());
+    onToast("Mueble actualizado"); setEditFurniture(null);
   };
 
   const handleDelete = async (f) => {
@@ -597,8 +683,9 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
               <div className="room-name" style={{fontSize:16}}>{f.name}</div>
               {f.description && <div className="room-meta" style={{marginTop:4}}>{f.description}</div>}
               <div className="room-meta" style={{marginTop:8}}>Por {f.createdByName} · {formatDate(f.createdAt)}</div>
-              <div style={{display:"flex",gap:8,marginTop:14}} onClick={e=>e.stopPropagation()}>
-                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("items",room,f)}>Ver objetos →</button>
+              <div style={{display:"flex",gap:6,marginTop:14,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("items",room,f)}>Ver →</button>
+                <button className="btn btn-ghost btn-sm" onClick={()=>{setEditForm({name:f.name,type:f.type,description:f.description||""});setEditFurniture(f);}}>Editar</button>
                 <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(f)}>Eliminar</button>
               </div>
             </div>
@@ -607,23 +694,19 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
       )}
       {showAdd && (
         <Modal title="Nuevo mueble" onClose={()=>setShowAdd(false)}>
-          <div className="form-group">
-            <label className="form-label">Nombre</label>
-            <input className="form-input" placeholder="Ej: Armario grande, Cajón derecho..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Tipo</label>
-            <select className="form-input" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-              {FURNITURE_TYPES.map(t=><option key={t}>{t}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Descripción (opcional)</label>
-            <input className="form-input" placeholder="Ej: El de la derecha al entrar" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} />
-          </div>
+          <FurnitureForm form={form} setForm={setForm}/>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowAdd(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleAdd}>Añadir mueble</button>
+          </div>
+        </Modal>
+      )}
+      {editFurniture && (
+        <Modal title="Editar mueble" onClose={()=>setEditFurniture(null)}>
+          <FurnitureForm form={editForm} setForm={setEditForm}/>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setEditFurniture(null)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleEdit}>Guardar cambios</button>
           </div>
         </Modal>
       )}
@@ -649,6 +732,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   const [bulkFurnitureId, setBulkFurnitureId] = useState("");
   const [bulkRoomFurniture, setBulkRoomFurniture] = useState([]);
   const [lightboxUrl, setLightboxUrl] = useState("");
+  const [viewMode, setViewMode] = useState("cards");
   const emptyForm = { name:"", description:"", tags:[], photoUrl:"", targetRoomId: room.id, targetFurnitureId: furniture.id };
   const [form, setForm] = useState(emptyForm);
 
@@ -773,14 +857,66 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
         <div className="toolbar-right">
           {selectedIds.size > 0 && (
             <button className="btn btn-ghost" onClick={()=>{setBulkRoomId(room.id);setShowBulkMove(true);}}>
-              📦 Mover {selectedIds.size} seleccionados
+              📦 Mover {selectedIds.size}
             </button>
           )}
-          <button className="btn btn-primary" onClick={()=>{setForm(emptyForm);setEditItem(null);setShowAdd(true)}}>+ Añadir objeto</button>
+          <div className="view-toggle">
+            <button className={`view-toggle-btn ${viewMode==="cards"?"active":""}`} onClick={()=>setViewMode("cards")} title="Cards">⊞</button>
+            <button className={`view-toggle-btn ${viewMode==="table"?"active":""}`} onClick={()=>setViewMode("table")} title="Tabla">☰</button>
+          </div>
+          <button className="btn btn-primary" onClick={()=>{setForm(emptyForm);setEditItem(null);setShowAdd(true)}}>+ Añadir</button>
         </div>
       </div>
       {filtered.length === 0 ? (
         <div className="empty-state"><div className="empty-icon">📦</div><div className="empty-title">{items.length===0?"Sin objetos aún":"Sin resultados"}</div></div>
+      ) : viewMode === "table" ? (
+        <div className="card" style={{padding:0,overflow:"hidden"}}>
+          <div className="table-wrap">
+            <table className="inv-table">
+              <thead>
+                <tr>
+                  <th style={{width:32}}><input type="checkbox" style={{accentColor:"var(--accent)"}} checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={()=>setSelectedIds(selectedIds.size===filtered.length?new Set():new Set(filtered.map(i=>i.id)))}/></th>
+                  <th>Objeto</th>
+                  <th>Categorías</th>
+                  <th>Editado por</th>
+                  <th>Fecha</th>
+                  <th style={{width:80}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(item => {
+                  const sel = selectedIds.has(item.id);
+                  return (
+                    <tr key={item.id} style={{background:sel?"var(--accent-bg)":""}}>
+                      <td><input type="checkbox" checked={sel} style={{accentColor:"var(--accent)"}} onChange={()=>setSelectedIds(s=>{const n=new Set(s);sel?n.delete(item.id):n.add(item.id);return n;})}/></td>
+                      <td>
+                        <div style={{display:"flex",alignItems:"center",gap:10}}>
+                          {item.photoUrl
+                            ? <img src={item.photoUrl} alt="" style={{width:36,height:36,borderRadius:6,objectFit:"cover",cursor:"zoom-in",flexShrink:0}} onClick={()=>setLightboxUrl(item.photoUrl)}/>
+                            : <div style={{width:36,height:36,background:"var(--bg3)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>📦</div>
+                          }
+                          <div>
+                            <div style={{fontWeight:500,fontSize:13.5}}>{item.name}</div>
+                            {item.description && <div style={{fontSize:11,color:"var(--text3)"}}>{item.description}</div>}
+                          </div>
+                        </div>
+                      </td>
+                      <td>{(item.tags||[]).length>0?<div style={{display:"flex",flexWrap:"wrap",gap:3}}>{item.tags.map(t=><span key={t} className="tag tag-accent" style={{fontSize:10,padding:"2px 7px"}}>{t}</span>)}</div>:<span style={{color:"var(--text3)"}}>—</span>}</td>
+                      <td style={{color:"var(--text2)",fontSize:12}}>{item.updatedByName||item.createdByName}</td>
+                      <td style={{color:"var(--text3)",fontSize:12,whiteSpace:"nowrap"}}>{formatDate(item.updatedAt)}</td>
+                      <td>
+                        <div style={{display:"flex",gap:4}}>
+                          <button className="btn btn-ghost btn-sm" onClick={()=>handleEdit(item)}>✏️</button>
+                          <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       ) : (
         <div className="grid-3">
           {filtered.map(item => {
