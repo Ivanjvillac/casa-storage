@@ -629,7 +629,9 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   const [search, setSearch] = useState("");
   const [filterTag, setFilterTag] = useState("");
   const [uploading, setUploading] = useState(false);
-  const emptyForm = { name:"", description:"", tags:[], photoUrl:"" };
+  const [allRooms, setAllRooms] = useState([]);
+  const [roomFurniture, setRoomFurniture] = useState([]);
+  const emptyForm = { name:"", description:"", tags:[], photoUrl:"", targetRoomId: room.id, targetFurnitureId: furniture.id };
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
@@ -637,6 +639,17 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
     const unsub = onSnapshot(q, snap => { setItems(snap.docs.map(d=>({id:d.id,...d.data()}))); setLoading(false); });
     return unsub;
   }, [furniture.id]);
+
+  useEffect(() => {
+    getDocs(query(collection(db,"rooms"), orderBy("createdAt","asc")))
+      .then(snap => setAllRooms(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, []);
+
+  useEffect(() => {
+    if (!form.targetRoomId) return;
+    getDocs(query(collection(db,"furniture"), where("roomId","==",form.targetRoomId), orderBy("createdAt","asc")))
+      .then(snap => setRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, [form.targetRoomId]);
 
   const filtered = items.filter(it => {
     const ms = !search || it.name.toLowerCase().includes(search.toLowerCase()) || (it.description||"").toLowerCase().includes(search.toLowerCase());
@@ -647,8 +660,19 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   const handleSave = async () => {
     if (!form.name.trim()) return;
     if (editItem) {
-      await updateDoc(doc(db,"items",editItem.id), { name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl, updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp() });
-      await logHistory(user.uid, user.displayName, "Editó objeto", `"${form.name}" en ${furniture.name} (${room.name})`);
+      const targetRoom = allRooms.find(r => r.id === form.targetRoomId);
+      const targetFurniture = roomFurniture.find(f => f.id === form.targetFurnitureId);
+      const newRoomName = targetRoom?.name || editItem.roomName;
+      const newFurnitureName = targetFurniture?.name || editItem.furnitureName;
+      await updateDoc(doc(db,"items",editItem.id), {
+        name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl,
+        furnitureId: form.targetFurnitureId || editItem.furnitureId,
+        furnitureName: newFurnitureName,
+        roomId: form.targetRoomId || editItem.roomId,
+        roomName: newRoomName,
+        updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp()
+      });
+      await logHistory(user.uid, user.displayName, "Editó objeto", `"${form.name}" → ${newFurnitureName} (${newRoomName})`);
       onToast("Objeto actualizado");
     } else {
       await addDoc(collection(db,"items"), { name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl, furnitureId:furniture.id, furnitureName:furniture.name, roomId:room.id, roomName:room.name, createdBy:user.uid, createdByName:user.displayName, updatedBy:user.uid, updatedByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
@@ -659,7 +683,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   };
 
   const handleEdit = (item) => {
-    setForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"" });
+    setForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"", targetRoomId:item.roomId, targetFurnitureId:item.furnitureId });
     setEditItem(item); setShowAdd(true);
   };
 
@@ -740,6 +764,23 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
               ))}
             </div>
           </div>
+          {editItem && (
+            <>
+              <div className="form-group">
+                <label className="form-label">Estancia</label>
+                <select className="form-input" value={form.targetRoomId} onChange={e=>setForm(f=>({...f,targetRoomId:e.target.value,targetFurnitureId:""}))}>
+                  {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Mueble</label>
+                <select className="form-input" value={form.targetFurnitureId} onChange={e=>setForm(f=>({...f,targetFurnitureId:e.target.value}))}>
+                  <option value="">— Selecciona mueble —</option>
+                  {roomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+              </div>
+            </>
+          )}
           <div className="form-group">
             <label className="form-label">Foto (opcional)</label>
             <PhotoUpload value={form.photoUrl} onChange={url=>setForm(f=>({...f,photoUrl:url}))} uploading={uploading} setUploading={setUploading} />
@@ -1004,6 +1045,51 @@ const HistoryPage = () => {
   );
 };
 
+// ─── Profile Modal ────────────────────────────────────────────────────────────
+const ProfileModal = ({ user, onClose, onToast }) => {
+  const [name, setName] = useState(user.displayName || "");
+  const [saving, setSaving] = useState(false);
+  const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
+  const initial = (user.displayName||user.email||"?")[0].toUpperCase();
+
+  const handleSave = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      await updateProfile(auth.currentUser, { displayName: name.trim() });
+      onToast("Nombre actualizado");
+      onClose();
+    } catch(e) { onToast("Error al guardar", "error"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title="Mi perfil" onClose={onClose}>
+      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
+        <div className="user-avatar" style={{background:color,width:48,height:48,fontSize:20}}>{initial}</div>
+        <div>
+          <div style={{fontWeight:500}}>{user.displayName||user.email}</div>
+          <div style={{fontSize:12,color:"var(--text3)"}}>{user.email}</div>
+        </div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Nombre</label>
+        <input className="form-input" value={name} onChange={e=>setName(e.target.value)} autoFocus
+          onKeyDown={e=>e.key==="Enter"&&handleSave()} />
+      </div>
+      <div className="modal-footer" style={{justifyContent:"space-between"}}>
+        <button className="btn btn-danger" onClick={()=>{signOut(auth);onClose();}}>Cerrar sesión</button>
+        <div style={{display:"flex",gap:10}}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saving?<span className="spinner"/>:"Guardar"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
   { id:"search", icon:"🔍", label:"Buscar" },
@@ -1012,7 +1098,7 @@ const NAV_ITEMS = [
   { id:"history", icon:"📋", label:"Historial" },
 ];
 
-const Sidebar = ({ user, page, onNavigate }) => {
+const Sidebar = ({ user, page, onNavigate, onOpenProfile }) => {
   const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   return (
@@ -1026,20 +1112,20 @@ const Sidebar = ({ user, page, onNavigate }) => {
           </button>
         ))}
       </div>
-      <div className="sidebar-user">
+      <div className="sidebar-user" style={{cursor:"pointer"}} onClick={onOpenProfile} title="Mi perfil">
         <div className="user-avatar" style={{background:color}}>{initial}</div>
         <div className="user-info">
           <div className="user-name">{user.displayName||user.email}</div>
-          <div className="user-role">Miembro del hogar</div>
+          <div className="user-role">Ver perfil</div>
         </div>
-        <button className="logout-btn" onClick={()=>signOut(auth)} title="Cerrar sesión">⎋</button>
+        <button className="logout-btn" onClick={e=>{e.stopPropagation();onOpenProfile();}} title="Mi perfil">👤</button>
       </div>
     </div>
   );
 };
 
 // ─── Bottom Nav (mobile) ──────────────────────────────────────────────────────
-const BottomNav = ({ user, page, onNavigate }) => {
+const BottomNav = ({ user, page, onNavigate, onOpenProfile }) => {
   const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   return (
@@ -1051,9 +1137,9 @@ const BottomNav = ({ user, page, onNavigate }) => {
             {item.label}
           </button>
         ))}
-        <button className="bottom-nav-item" onClick={()=>signOut(auth)}>
+        <button className="bottom-nav-item" onClick={onOpenProfile}>
           <div className="nav-icon" style={{width:22,height:22,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:"#fff"}}>{initial}</div>
-          Salir
+          Perfil
         </button>
       </div>
     </nav>
@@ -1065,6 +1151,7 @@ const AuthedApp = ({ user }) => {
   const { toasts, show: toast } = useToast();
   const [page, setPage] = useState("search");
   const [navState, setNavState] = useState({});
+  const [showProfile, setShowProfile] = useState(false);
 
   const navigate = (p, room, furniture) => {
     setPage(p);
@@ -1088,10 +1175,11 @@ const AuthedApp = ({ user }) => {
 
   return (
     <div className="app-shell">
-      <Sidebar user={user} page={activePage} onNavigate={navigate}/>
+      <Sidebar user={user} page={activePage} onNavigate={navigate} onOpenProfile={()=>setShowProfile(true)}/>
       <main className="main-content">{renderPage()}</main>
-      <BottomNav user={user} page={activePage} onNavigate={navigate}/>
+      <BottomNav user={user} page={activePage} onNavigate={navigate} onOpenProfile={()=>setShowProfile(true)}/>
       <ToastContainer toasts={toasts}/>
+      {showProfile && <ProfileModal user={user} onClose={()=>setShowProfile(false)} onToast={toast}/>}
     </div>
   );
 };
