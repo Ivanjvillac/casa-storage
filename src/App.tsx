@@ -9,7 +9,8 @@ import {
   updateProfile,
 } from "firebase/auth";
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
   collection,
   doc,
   addDoc,
@@ -38,7 +39,7 @@ const CLOUDINARY_UPLOAD_PRESET = "casa_storage_unsigned";
 
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
-const db = getFirestore(firebaseApp);
+const db = initializeFirestore(firebaseApp, { localCache: persistentLocalCache() });
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const ROOM_ICONS = ["🛋️","🛏️","🍳","🚿","🚗","📦","🌿","🏠","📚","🧹"];
@@ -319,6 +320,16 @@ const Modal = ({ title, onClose, children, large }) => (
         <button className="modal-close" onClick={onClose}>×</button>
       </div>
       {children}
+    </div>
+  </div>
+);
+
+// ─── Image Lightbox ───────────────────────────────────────────────────────────
+const ImageLightbox = ({ url, onClose }) => (
+  <div className="modal-overlay" onClick={onClose} style={{alignItems:"center",justifyContent:"center",zIndex:300}}>
+    <div style={{position:"relative",maxWidth:"90vw",maxHeight:"90vh"}}>
+      <img src={url} alt="" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:12,objectFit:"contain",display:"block",boxShadow:"0 8px 48px rgba(0,0,0,0.8)"}} />
+      <button onClick={onClose} style={{position:"absolute",top:-12,right:-12,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:"50%",width:32,height:32,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
     </div>
   </div>
 );
@@ -631,6 +642,13 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   const [uploading, setUploading] = useState(false);
   const [allRooms, setAllRooms] = useState([]);
   const [roomFurniture, setRoomFurniture] = useState([]);
+  const [sortBy, setSortBy] = useState("reciente");
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBulkMove, setShowBulkMove] = useState(false);
+  const [bulkRoomId, setBulkRoomId] = useState("");
+  const [bulkFurnitureId, setBulkFurnitureId] = useState("");
+  const [bulkRoomFurniture, setBulkRoomFurniture] = useState([]);
+  const [lightboxUrl, setLightboxUrl] = useState("");
   const emptyForm = { name:"", description:"", tags:[], photoUrl:"", targetRoomId: room.id, targetFurnitureId: furniture.id };
   const [form, setForm] = useState(emptyForm);
 
@@ -655,6 +673,13 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
     const ms = !search || it.name.toLowerCase().includes(search.toLowerCase()) || (it.description||"").toLowerCase().includes(search.toLowerCase());
     const mt = !filterTag || (it.tags||[]).includes(filterTag);
     return ms && mt;
+  }).sort((a,b) => {
+    if (sortBy === "nombre-az") return (a.name||"").localeCompare(b.name||"");
+    if (sortBy === "nombre-za") return (b.name||"").localeCompare(a.name||"");
+    if (sortBy === "categoria") return ((a.tags||[])[0]||"").localeCompare((b.tags||[])[0]||"");
+    const ta = a.updatedAt?.toDate?.()?.getTime() || 0;
+    const tb = b.updatedAt?.toDate?.()?.getTime() || 0;
+    return tb - ta;
   });
 
   const handleSave = async () => {
@@ -694,6 +719,25 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
     onToast("Objeto eliminado");
   };
 
+  useEffect(() => {
+    if (!bulkRoomId) return;
+    getDocs(query(collection(db,"furniture"), where("roomId","==",bulkRoomId), orderBy("createdAt","asc")))
+      .then(snap => setBulkRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, [bulkRoomId]);
+
+  const handleBulkMove = async () => {
+    if (!bulkFurnitureId) return;
+    const targetRoom = allRooms.find(r=>r.id===bulkRoomId);
+    const targetFurniture = bulkRoomFurniture.find(f=>f.id===bulkFurnitureId);
+    if (!targetRoom||!targetFurniture) return;
+    await Promise.all([...selectedIds].map(id =>
+      updateDoc(doc(db,"items",id), { furnitureId:bulkFurnitureId, furnitureName:targetFurniture.name, roomId:bulkRoomId, roomName:targetRoom.name, updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp() })
+    ));
+    await logHistory(user.uid, user.displayName, "Movió objetos", `${selectedIds.size} objetos → ${targetFurniture.name} (${targetRoom.name})`);
+    onToast(`${selectedIds.size} objetos movidos`);
+    setSelectedIds(new Set()); setShowBulkMove(false); setBulkRoomId(""); setBulkFurnitureId("");
+  };
+
   const toggleTag = (tag) => setForm(f=>({ ...f, tags: f.tags.includes(tag) ? f.tags.filter(t=>t!==tag) : [...f.tags,tag] }));
 
   if (loading) return <div className="loading-page"><div className="spinner"/></div>;
@@ -712,7 +756,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
         <p className="page-subtitle">{room.icon} {room.name} · {furniture.type}</p>
       </div>
       <div className="toolbar">
-        <div className="search-wrapper" style={{flex:1,maxWidth:320}}>
+        <div className="search-wrapper" style={{flex:1,maxWidth:280}}>
           <span className="search-icon">🔍</span>
           <input className="form-input search-input" placeholder="Buscar objeto..." value={search} onChange={e=>setSearch(e.target.value)} />
         </div>
@@ -720,7 +764,18 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
           <option value="">Todas las categorías</option>
           {ITEM_TAGS.map(t=><option key={t}>{t}</option>)}
         </select>
+        <select className="form-input" style={{width:"auto"}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+          <option value="reciente">Más reciente</option>
+          <option value="nombre-az">Nombre A–Z</option>
+          <option value="nombre-za">Nombre Z–A</option>
+          <option value="categoria">Categoría</option>
+        </select>
         <div className="toolbar-right">
+          {selectedIds.size > 0 && (
+            <button className="btn btn-ghost" onClick={()=>{setBulkRoomId(room.id);setShowBulkMove(true);}}>
+              📦 Mover {selectedIds.size} seleccionados
+            </button>
+          )}
           <button className="btn btn-primary" onClick={()=>{setForm(emptyForm);setEditItem(null);setShowAdd(true)}}>+ Añadir objeto</button>
         </div>
       </div>
@@ -728,23 +783,55 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
         <div className="empty-state"><div className="empty-icon">📦</div><div className="empty-title">{items.length===0?"Sin objetos aún":"Sin resultados"}</div></div>
       ) : (
         <div className="grid-3">
-          {filtered.map(item => (
-            <div key={item.id} className="card">
-              <div className="item-photo">{item.photoUrl ? <img src={item.photoUrl} alt={item.name}/> : "📦"}</div>
-              <div className="item-name">{item.name}</div>
-              {item.description && <div className="item-location">{item.description}</div>}
-              {(item.tags||[]).length>0 && <div className="item-tags">{item.tags.map(t=><span key={t} className="tag tag-accent">{t}</span>)}</div>}
-              <div className="item-meta">
-                <span>✏️ {item.updatedByName||item.createdByName}</span>
-                <span>{formatDate(item.updatedAt)}</span>
+          {filtered.map(item => {
+            const sel = selectedIds.has(item.id);
+            return (
+              <div key={item.id} className="card" style={{outline:sel?"2px solid var(--accent)":"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <input type="checkbox" checked={sel} onChange={()=>setSelectedIds(s=>{const n=new Set(s);sel?n.delete(item.id):n.add(item.id);return n;})} style={{width:16,height:16,cursor:"pointer",accentColor:"var(--accent)"}}/>
+                  <span style={{flex:1}}/>
+                </div>
+                <div className="item-photo" style={{cursor:item.photoUrl?"zoom-in":"default"}} onClick={()=>item.photoUrl&&setLightboxUrl(item.photoUrl)}>
+                  {item.photoUrl ? <img src={item.photoUrl} alt={item.name}/> : "📦"}
+                </div>
+                <div className="item-name">{item.name}</div>
+                {item.description && <div className="item-location">{item.description}</div>}
+                {(item.tags||[]).length>0 && <div className="item-tags">{item.tags.map(t=><span key={t} className="tag tag-accent">{t}</span>)}</div>}
+                <div className="item-meta">
+                  <span>✏️ {item.updatedByName||item.createdByName}</span>
+                  <span>{formatDate(item.updatedAt)}</span>
+                </div>
+                <div style={{display:"flex",gap:6,marginTop:12}}>
+                  <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>handleEdit(item)}>Editar</button>
+                  <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
+                </div>
               </div>
-              <div style={{display:"flex",gap:6,marginTop:12}}>
-                <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>handleEdit(item)}>Editar</button>
-                <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      )}
+      {lightboxUrl && <ImageLightbox url={lightboxUrl} onClose={()=>setLightboxUrl("")}/>}
+      {showBulkMove && (
+        <Modal title={`Mover ${selectedIds.size} objetos`} onClose={()=>{setShowBulkMove(false);setBulkRoomId("");setBulkFurnitureId("");}}>
+          <div className="form-group">
+            <label className="form-label">Estancia destino</label>
+            <select className="form-input" value={bulkRoomId} onChange={e=>{setBulkRoomId(e.target.value);setBulkFurnitureId("");}}>
+              <option value="">— Selecciona estancia —</option>
+              {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Mueble destino</label>
+            <select className="form-input" value={bulkFurnitureId} onChange={e=>setBulkFurnitureId(e.target.value)} disabled={!bulkRoomId}>
+              <option value="">— Selecciona mueble —</option>
+              {bulkRoomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>{setShowBulkMove(false);setBulkRoomId("");setBulkFurnitureId("");}}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleBulkMove} disabled={!bulkFurnitureId}>Mover todos</button>
+          </div>
+        </Modal>
       )}
       {showAdd && (
         <Modal title={editItem?"Editar objeto":"Nuevo objeto"} onClose={()=>{setShowAdd(false);setEditItem(null);}} large>
@@ -798,12 +885,29 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
 };
 
 // ─── Search ───────────────────────────────────────────────────────────────────
-const SearchPage = ({ onNavigate }) => {
+const SearchPage = ({ user, onToast, onNavigate }) => {
   const [query_, setQuery_] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [filterTag, setFilterTag] = useState("");
+  const [editItem, setEditItem] = useState(null);
+  const [editForm, setEditForm] = useState({ name:"", description:"", tags:[], photoUrl:"", targetRoomId:"", targetFurnitureId:"" });
+  const [uploading, setUploading] = useState(false);
+  const [allRooms, setAllRooms] = useState([]);
+  const [roomFurniture, setRoomFurniture] = useState([]);
+  const [lightboxUrl, setLightboxUrl] = useState("");
+
+  useEffect(() => {
+    getDocs(query(collection(db,"rooms"), orderBy("createdAt","asc")))
+      .then(snap => setAllRooms(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, []);
+
+  useEffect(() => {
+    if (!editForm.targetRoomId) return;
+    getDocs(query(collection(db,"furniture"), where("roomId","==",editForm.targetRoomId), orderBy("createdAt","asc")))
+      .then(snap => setRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
+  }, [editForm.targetRoomId]);
 
   const handleSearch = async () => {
     if (!query_.trim()) return;
@@ -820,6 +924,31 @@ const SearchPage = ({ onNavigate }) => {
     ).filter(it => !filterTag || (it.tags||[]).includes(filterTag)));
     setLoading(false);
   };
+
+  const openEdit = (item) => {
+    setEditForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"", targetRoomId:item.roomId, targetFurnitureId:item.furnitureId });
+    setEditItem(item);
+  };
+
+  const handleSave = async () => {
+    if (!editForm.name.trim()) return;
+    const targetRoom = allRooms.find(r=>r.id===editForm.targetRoomId);
+    const targetFurniture = roomFurniture.find(f=>f.id===editForm.targetFurnitureId);
+    await updateDoc(doc(db,"items",editItem.id), {
+      name:editForm.name.trim(), description:editForm.description, tags:editForm.tags, photoUrl:editForm.photoUrl,
+      furnitureId: editForm.targetFurnitureId || editItem.furnitureId,
+      furnitureName: targetFurniture?.name || editItem.furnitureName,
+      roomId: editForm.targetRoomId || editItem.roomId,
+      roomName: targetRoom?.name || editItem.roomName,
+      updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp()
+    });
+    await logHistory(user.uid, user.displayName, "Editó objeto", `"${editForm.name}" → ${targetFurniture?.name||editItem.furnitureName}`);
+    onToast("Objeto actualizado");
+    setResults(rs => rs.map(r => r.id===editItem.id ? {...r, ...editForm, furnitureName:targetFurniture?.name||r.furnitureName, roomName:targetRoom?.name||r.roomName} : r));
+    setEditItem(null);
+  };
+
+  const toggleEditTag = (tag) => setEditForm(f=>({ ...f, tags: f.tags.includes(tag) ? f.tags.filter(t=>t!==tag) : [...f.tags,tag] }));
 
   return (
     <div className="fade-in">
@@ -848,7 +977,7 @@ const SearchPage = ({ onNavigate }) => {
               <div key={item.id} className="card">
                 <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
                   {item.photoUrl
-                    ? <img src={item.photoUrl} alt={item.name} style={{width:64,height:64,objectFit:"cover",borderRadius:8,flexShrink:0}}/>
+                    ? <img src={item.photoUrl} alt={item.name} style={{width:64,height:64,objectFit:"cover",borderRadius:8,flexShrink:0,cursor:"zoom-in"}} onClick={()=>setLightboxUrl(item.photoUrl)}/>
                     : <div style={{width:64,height:64,background:"var(--bg3)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>📦</div>
                   }
                   <div style={{flex:1,minWidth:0}}>
@@ -865,10 +994,51 @@ const SearchPage = ({ onNavigate }) => {
                   <span>✏️ {item.updatedByName}</span>
                   <span>{formatDate(item.updatedAt)}</span>
                 </div>
+                <button className="btn btn-ghost btn-sm" style={{width:"100%",marginTop:10,justifyContent:"center"}} onClick={()=>openEdit(item)}>Editar</button>
               </div>
             ))}
           </div>
         </>
+      )}
+      {lightboxUrl && <ImageLightbox url={lightboxUrl} onClose={()=>setLightboxUrl("")}/>}
+      {editItem && (
+        <Modal title="Editar objeto" onClose={()=>setEditItem(null)} large>
+          <div className="form-group">
+            <label className="form-label">Nombre</label>
+            <input className="form-input" value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))} autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Descripción</label>
+            <input className="form-input" value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Categorías</label>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {ITEM_TAGS.map(tag=><span key={tag} className={`tag ${editForm.tags.includes(tag)?"tag-accent":""}`} style={{cursor:"pointer"}} onClick={()=>toggleEditTag(tag)}>{tag}</span>)}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Estancia</label>
+            <select className="form-input" value={editForm.targetRoomId} onChange={e=>setEditForm(f=>({...f,targetRoomId:e.target.value,targetFurnitureId:""}))}>
+              {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Mueble</label>
+            <select className="form-input" value={editForm.targetFurnitureId} onChange={e=>setEditForm(f=>({...f,targetFurnitureId:e.target.value}))}>
+              <option value="">— Selecciona mueble —</option>
+              {roomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Foto</label>
+            <PhotoUpload value={editForm.photoUrl} onChange={url=>setEditForm(f=>({...f,photoUrl:url}))} uploading={uploading} setUploading={setUploading}/>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setEditItem(null)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSave} disabled={uploading}>{uploading?<span className="spinner"/>:"Guardar cambios"}</button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1163,7 +1333,7 @@ const AuthedApp = ({ user }) => {
 
   const renderPage = () => {
     switch(page) {
-      case "search":    return <SearchPage onNavigate={navigate}/>;
+      case "search":    return <SearchPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "rooms":     return <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "furniture": return navState.room ? <FurniturePage user={user} room={navState.room} onToast={toast} onNavigate={navigate}/> : <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "items":     return (navState.room&&navState.furniture) ? <ItemsPage user={user} room={navState.room} furniture={navState.furniture} onToast={toast} onNavigate={navigate}/> : <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
