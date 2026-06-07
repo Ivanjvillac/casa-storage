@@ -1,5 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#0f0f11"/>
-  <text x="16" y="23" font-family="Georgia, serif" font-size="20" font-weight="700" text-anchor="middle" fill="#f0f0f0">C</text>
-  <circle cx="22" cy="9" r="4" fill="#e8715a"/>
+  <rect width="32" height="32" rx="7" fill="#0f0f11"/>
+  <!-- Roof -->
+  <polygon points="16,6 26,14 6,14" fill="#e8715a"/>
+  <!-- House body -->
+  <rect x="8" y="14" width="16" height="12" fill="#2a2a34"/>
+  <!-- Door -->
+  <rect x="13" y="19" width="6" height="7" rx="3" fill="#e8715a"/>
+  <!-- Windows -->
+  <rect x="9" y="16" width="4" height="4" rx="1" fill="#e8c95a"/>
+  <rect x="19" y="16" width="4" height="4" rx="1" fill="#e8c95a"/>
 </svg>

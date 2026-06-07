@@ -137,7 +137,7 @@ const styles = `
   .login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 20px; background-image: radial-gradient(ellipse at 20% 50%, rgba(232,113,90,0.06) 0%, transparent 60%), radial-gradient(ellipse at 80% 20%, rgba(90,159,232,0.05) 0%, transparent 50%); }
   .login-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 40px; width: 100%; max-width: 400px; box-shadow: var(--shadow); }
   .login-logo { text-align: center; margin-bottom: 32px; }
-  .login-logo h1 { font-family: var(--font-display); font-size: 36px; font-weight: 700; }
+  .login-logo h1 { font-family: var(--font-display); font-size: 36px; font-weight: 700; color: var(--text); }
   .login-logo span { color: var(--accent); }
   .login-logo p { color: var(--text2); font-size: 14px; margin-top: 6px; }
   .login-tabs { display: flex; background: var(--bg3); border-radius: 10px; padding: 3px; margin-bottom: 24px; }
@@ -208,11 +208,31 @@ const styles = `
   @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
   .fade-in { animation: fadeIn 0.3s ease; }
+  /* Mobile bottom nav */
+  .bottom-nav {
+    display: none;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    background: var(--bg2); border-top: 1px solid var(--border);
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+  }
+  .bottom-nav-items { display: flex; justify-content: space-around; align-items: center; }
+  .bottom-nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 16px; border-radius: 10px; cursor: pointer;
+    border: none; background: none; color: var(--text3); transition: all 0.15s;
+    font-family: var(--font-body); font-size: 10px; font-weight: 500;
+    min-width: 64px;
+  }
+  .bottom-nav-item .nav-icon { font-size: 20px; line-height: 1; }
+  .bottom-nav-item.active { color: var(--accent); }
+  .bottom-nav-item.active .nav-icon { transform: scale(1.1); }
   @media (max-width: 768px) {
     :root { --sidebar: 0px; }
-    .sidebar { transform: translateX(-240px); width: 240px; }
-    .main-content { margin-left: 0; padding: 16px; }
+    .sidebar { display: none; }
+    .bottom-nav { display: block; }
+    .main-content { margin-left: 0; padding: 16px; padding-bottom: 90px; }
     .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .toast-container { bottom: 90px; }
   }
 `;
 
@@ -985,13 +1005,14 @@ const HistoryPage = () => {
 };
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { id:"search", icon:"🔍", label:"Buscar" },
+  { id:"rooms",  icon:"🏠", label:"Estancias" },
+  { id:"expenses",icon:"💸", label:"Gastos" },
+  { id:"history", icon:"📋", label:"Historial" },
+];
+
 const Sidebar = ({ user, page, onNavigate }) => {
-  const navItems = [
-    { id:"search", icon:"🔍", label:"Buscar objeto" },
-    { id:"rooms", icon:"🏠", label:"Estancias" },
-    { id:"expenses", icon:"💸", label:"Gastos" },
-    { id:"history", icon:"📋", label:"Historial" },
-  ];
   const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   return (
@@ -999,7 +1020,7 @@ const Sidebar = ({ user, page, onNavigate }) => {
       <div className="sidebar-logo"><h1>Casa<span>.</span></h1><p>Gestión del hogar</p></div>
       <div className="sidebar-nav">
         <div className="section-title">Navegación</div>
-        {navItems.map(item=>(
+        {NAV_ITEMS.map(item=>(
           <button key={item.id} className={`nav-item ${page===item.id?"active":""}`} onClick={()=>onNavigate(item.id)}>
             <span className="icon">{item.icon}</span>{item.label}
           </button>
@@ -1017,6 +1038,28 @@ const Sidebar = ({ user, page, onNavigate }) => {
   );
 };
 
+// ─── Bottom Nav (mobile) ──────────────────────────────────────────────────────
+const BottomNav = ({ user, page, onNavigate }) => {
+  const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
+  const initial = (user.displayName||user.email||"?")[0].toUpperCase();
+  return (
+    <nav className="bottom-nav">
+      <div className="bottom-nav-items">
+        {NAV_ITEMS.map(item => (
+          <button key={item.id} className={`bottom-nav-item ${page===item.id?"active":""}`} onClick={()=>onNavigate(item.id)}>
+            <span className="nav-icon">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+        <button className="bottom-nav-item" onClick={()=>signOut(auth)}>
+          <div className="nav-icon" style={{width:22,height:22,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:"#fff"}}>{initial}</div>
+          Salir
+        </button>
+      </div>
+    </nav>
+  );
+};
+
 // ─── App Shell ────────────────────────────────────────────────────────────────
 const AuthedApp = ({ user }) => {
   const { toasts, show: toast } = useToast();
@@ -1028,6 +1071,8 @@ const AuthedApp = ({ user }) => {
     if (room) setNavState(s=>({...s,room}));
     if (furniture) setNavState(s=>({...s,furniture}));
   };
+
+  const activePage = ["furniture","items"].includes(page) ? "rooms" : page;
 
   const renderPage = () => {
     switch(page) {
@@ -1043,8 +1088,9 @@ const AuthedApp = ({ user }) => {
 
   return (
     <div className="app-shell">
-      <Sidebar user={user} page={["furniture","items"].includes(page)?"rooms":page} onNavigate={navigate}/>
+      <Sidebar user={user} page={activePage} onNavigate={navigate}/>
       <main className="main-content">{renderPage()}</main>
+      <BottomNav user={user} page={activePage} onNavigate={navigate}/>
       <ToastContainer toasts={toasts}/>
     </div>
   );
