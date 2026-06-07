@@ -486,9 +486,10 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
   const [furnitureCounts, setFurnitureCounts] = useState({});
 
   useEffect(() => {
-    const q = query(collection(db, "rooms"), orderBy("order","asc"));
+    const q = query(collection(db, "rooms"), orderBy("createdAt","asc"));
     const unsub = onSnapshot(q, async snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a,b) => (a.order ?? Infinity) - (b.order ?? Infinity));
       setRooms(data); setLoading(false);
       const counts = {};
       for (const room of data) {
