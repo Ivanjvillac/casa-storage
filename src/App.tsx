@@ -9,14 +9,15 @@ import {
   updateProfile,
 } from "firebase/auth";
 import {
-  initializeFirestore,
-  persistentLocalCache,
+  getFirestore,
   collection,
   doc,
   addDoc,
   updateDoc,
   deleteDoc,
   getDocs,
+  getDoc,
+  setDoc,
   onSnapshot,
   query,
   orderBy,
@@ -39,7 +40,7 @@ const CLOUDINARY_UPLOAD_PRESET = "casa_storage_unsigned";
 
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
-const db = initializeFirestore(firebaseApp, { localCache: persistentLocalCache() });
+const db = getFirestore(firebaseApp);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const ROOM_ICONS = ["🛋️","🛏️","🍳","🚿","🚗","📦","🌿","🏠","📚","🧹"];
@@ -56,6 +57,15 @@ const EXPENSE_CATEGORIES = [
 ];
 const ITEM_TAGS = ["Ropa","Herramientas","Documentos","Electrónica","Medicamentos","Limpieza","Cocina","Deportes","Libros","Juguetes","Varios"];
 const USER_COLORS = ["#e8715a","#5a9fe8","#5ae87a","#e8c95a","#c25ae8","#5ae8d4"];
+const EVENT_COLORS = [
+  { id:"accent", color:"#e8715a", label:"Coral" },
+  { id:"blue",   color:"#5a9fe8", label:"Azul" },
+  { id:"green",  color:"#5ae87a", label:"Verde" },
+  { id:"yellow", color:"#e8c95a", label:"Amarillo" },
+  { id:"purple", color:"#c25ae8", label:"Morado" },
+];
+const WEEKDAYS_ES = ["L","M","X","J","V","S","D"];
+const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = `
@@ -173,23 +183,6 @@ const styles = `
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 24px; flex-wrap: wrap; }
   .toolbar-right { margin-left: auto; display: flex; gap: 8px; }
   .empty-state { text-align: center; padding: 60px 20px; color: var(--text3); }
-  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .inv-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
-  .inv-table th { text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  .inv-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  .inv-table tr:last-child td { border-bottom: none; }
-  .inv-table tr:hover td { background: var(--bg3); }
-  .view-toggle { display: flex; background: var(--bg3); border-radius: 8px; padding: 2px; border: 1px solid var(--border); }
-  .view-toggle-btn { padding: 5px 10px; border-radius: 6px; border: none; background: none; color: var(--text3); cursor: pointer; font-size: 15px; transition: all 0.15s; }
-  .view-toggle-btn.active { background: var(--bg2); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-  .toolbar { flex-wrap: wrap; }
-  @media (max-width: 600px) {
-    .toolbar > * { flex-shrink: 0; }
-    .toolbar-right { width: 100%; justify-content: flex-end; }
-    .page-title { font-size: 26px; }
-    .inv-table { font-size: 12px; }
-    .inv-table th, .inv-table td { padding: 8px 10px; }
-  }
   .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
   .empty-title { font-size: 16px; color: var(--text2); margin-bottom: 8px; }
   .empty-desc { font-size: 13px; }
@@ -226,7 +219,64 @@ const styles = `
   @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes spin { to { transform: rotate(360deg); } }
   .fade-in { animation: fadeIn 0.3s ease; }
-  /* Mobile bottom nav */
+  /* Calendar */
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .cal-nav { display: flex; align-items: center; gap: 14px; }
+  .cal-month-label { font-family: var(--font-display); font-size: 22px; font-weight: 500; min-width: 200px; text-align: center; text-transform: capitalize; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .cal-weekday { text-align: center; font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; padding-bottom: 8px; font-weight: 500; }
+  .cal-day {
+    aspect-ratio: 1; border-radius: 10px; background: var(--bg2); border: 1px solid var(--border);
+    padding: 6px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column;
+    position: relative; overflow: hidden; min-height: 56px;
+  }
+  .cal-day:hover { border-color: var(--accent); background: var(--bg3); }
+  .cal-day.other-month { opacity: 0.3; }
+  .cal-day.today { border-color: var(--accent); border-width: 2px; }
+  .cal-day-num { font-size: 12px; font-weight: 500; color: var(--text2); }
+  .cal-day.today .cal-day-num { color: var(--accent); font-weight: 700; }
+  .cal-day-dots { display: flex; flex-wrap: wrap; gap: 2px; margin-top: auto; }
+  .cal-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+  .cal-day-events-mobile { display: none; }
+  .upcoming-list { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+  .event-row { display: flex; align-items: center; gap: 12px; }
+  .event-color-bar { width: 4px; height: 36px; border-radius: 4px; flex-shrink: 0; }
+  .event-date-badge {
+    width: 44px; height: 44px; border-radius: 10px; background: var(--bg3); border: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .event-date-badge .day { font-family: var(--font-display); font-size: 16px; font-weight: 600; line-height: 1; }
+  .event-date-badge .mon { font-size: 9px; color: var(--text3); text-transform: uppercase; }
+
+  /* Book club */
+  .book-card { display: flex; gap: 16px; align-items: flex-start; }
+  .book-spine { width: 56px; height: 80px; border-radius: 4px 8px 8px 4px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: 2px 2px 8px rgba(0,0,0,0.3); }
+  .proposal-slot {
+    border: 2px dashed var(--border); border-radius: var(--radius); padding: 18px;
+    display: flex; align-items: center; gap: 14px; transition: all 0.2s;
+  }
+  .proposal-slot.filled { border-style: solid; border-color: var(--border); background: var(--bg2); }
+  .proposal-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; color: #fff; flex-shrink: 0; }
+  .roulette-wrap { text-align: center; padding: 40px 20px; }
+  .roulette-book { font-size: 64px; margin-bottom: 16px; display: inline-block; }
+  .roulette-spinning { animation: rouletteShake 0.15s infinite; }
+  @keyframes rouletteShake { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+  .progress-track { height: 10px; background: var(--bg4); border-radius: 6px; overflow: hidden; position: relative; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 6px; transition: width 0.6s ease; }
+  .milestone-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .milestone-row:last-child { border-bottom: none; }
+  .milestone-check {
+    width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; font-size: 13px;
+  }
+  .milestone-check.done { background: var(--green); border-color: var(--green); color: #0f0f11; }
+  .milestone-check.overdue { border-color: var(--accent); }
+  .milestone-info { flex: 1; }
+  .milestone-date { font-size: 11px; color: var(--text3); }
+  .milestone-label { font-size: 14px; font-weight: 500; }
+  .milestone-label.done-text { text-decoration: line-through; color: var(--text3); }
+
+
   .bottom-nav {
     display: none;
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
@@ -251,6 +301,9 @@ const styles = `
     .main-content { margin-left: 0; padding: 16px; padding-bottom: 90px; }
     .grid-2, .grid-3 { grid-template-columns: 1fr; }
     .toast-container { bottom: 90px; }
+    .cal-day { min-height: 42px; padding: 4px; }
+    .cal-month-label { font-size: 17px; min-width: 140px; }
+    .book-card { flex-direction: column; align-items: center; text-align: center; }
   }
 `;
 
@@ -269,6 +322,50 @@ const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,
 const monthLabel = (mk) => {
   const [y,m] = mk.split("-");
   return new Date(Number(y), Number(m)-1).toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+};
+
+// Build a 6-week grid for a given month (Monday-first)
+const buildCalendarGrid = (year, month) => {
+  const firstOfMonth = new Date(year, month, 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7; // Monday=0
+  const gridStart = new Date(year, month, 1 - startOffset);
+  const days = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    days.push(d);
+  }
+  return days;
+};
+const isoDate = (d) => {
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+};
+const isSameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+
+// Distribute totalPages across N milestones between startDate and endDate (inclusive), roughly every ~3 days
+const generateMilestones = (totalPages, startDate, endDate) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const totalDays = Math.max(1, Math.round((end - start) / (1000*60*60*24)));
+  const intervalDays = totalDays <= 7 ? 1 : totalDays <= 21 ? 2 : 3;
+  const numMilestones = Math.max(1, Math.floor(totalDays / intervalDays));
+  const milestones = [];
+  for (let i = 1; i <= numMilestones; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + Math.round((totalDays * i) / numMilestones));
+    const pageGoal = Math.round((totalPages * i) / numMilestones);
+    milestones.push({
+      date: isoDate(d > end ? end : d),
+      pageGoal: Math.min(pageGoal, totalPages),
+      label: `Hasta la página ${Math.min(pageGoal, totalPages)}`,
+      done: false,
+    });
+  }
+  // Ensure last milestone matches end date and totalPages exactly
+  milestones[milestones.length-1].date = isoDate(end);
+  milestones[milestones.length-1].pageGoal = totalPages;
+  return milestones;
 };
 
 const compressImage = (file) => new Promise((resolve) => {
@@ -337,16 +434,6 @@ const Modal = ({ title, onClose, children, large }) => (
         <button className="modal-close" onClick={onClose}>×</button>
       </div>
       {children}
-    </div>
-  </div>
-);
-
-// ─── Image Lightbox ───────────────────────────────────────────────────────────
-const ImageLightbox = ({ url, onClose }) => (
-  <div className="modal-overlay" onClick={onClose} style={{alignItems:"center",justifyContent:"center",zIndex:300}}>
-    <div style={{position:"relative",maxWidth:"90vw",maxHeight:"90vh"}}>
-      <img src={url} alt="" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:12,objectFit:"contain",display:"block",boxShadow:"0 8px 48px rgba(0,0,0,0.8)"}} />
-      <button onClick={onClose} style={{position:"absolute",top:-12,right:-12,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",borderRadius:"50%",width:32,height:32,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
     </div>
   </div>
 );
@@ -456,40 +543,17 @@ const LoginPage = ({ onToast }) => {
 };
 
 // ─── Rooms ────────────────────────────────────────────────────────────────────
-const RoomForm = ({ form, setForm }) => (
-  <>
-    <div className="form-group">
-      <label className="form-label">Nombre</label>
-      <input className="form-input" placeholder="Ej: Salón, Dormitorio..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
-    </div>
-    <div className="form-group">
-      <label className="form-label">Icono</label>
-      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-        {ROOM_ICONS.map(ic => (
-          <span key={ic} onClick={()=>setForm(f=>({...f,icon:ic}))}
-            style={{fontSize:24,cursor:"pointer",padding:6,borderRadius:8,background:form.icon===ic?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${form.icon===ic?"var(--accent)":"var(--border)"}`}}>
-            {ic}
-          </span>
-        ))}
-      </div>
-    </div>
-  </>
-);
-
 const RoomsPage = ({ user, onToast, onNavigate }) => {
   const [rooms, setRooms] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [editRoom, setEditRoom] = useState(null);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name:"", icon:"🛋️" });
-  const [editForm, setEditForm] = useState({ name:"", icon:"🛋️" });
   const [furnitureCounts, setFurnitureCounts] = useState({});
 
   useEffect(() => {
     const q = query(collection(db, "rooms"), orderBy("createdAt","asc"));
     const unsub = onSnapshot(q, async snap => {
-      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .sort((a,b) => (a.order ?? Infinity) - (b.order ?? Infinity));
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRooms(data); setLoading(false);
       const counts = {};
       for (const room of data) {
@@ -503,17 +567,9 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
 
   const handleAdd = async () => {
     if (!form.name.trim()) return;
-    const maxOrder = rooms.reduce((m,r)=>Math.max(m,r.order||0),0);
-    await addDoc(collection(db,"rooms"), { name:form.name.trim(), icon:form.icon, order:maxOrder+1, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
+    await addDoc(collection(db,"rooms"), { name:form.name.trim(), icon:form.icon, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
     await logHistory(user.uid, user.displayName, "Creó estancia", form.name.trim());
     onToast("Estancia creada"); setShowAdd(false); setForm({ name:"", icon:"🛋️" });
-  };
-
-  const handleEdit = async () => {
-    if (!editForm.name.trim()) return;
-    await updateDoc(doc(db,"rooms",editRoom.id), { name:editForm.name.trim(), icon:editForm.icon, updatedAt:serverTimestamp() });
-    await logHistory(user.uid, user.displayName, "Editó estancia", editForm.name.trim());
-    onToast("Estancia actualizada"); setEditRoom(null);
   };
 
   const handleDelete = async (room) => {
@@ -521,17 +577,6 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
     await deleteDoc(doc(db,"rooms",room.id));
     await logHistory(user.uid, user.displayName, "Eliminó estancia", room.name);
     onToast("Estancia eliminada");
-  };
-
-  const moveRoom = async (idx, dir) => {
-    const swapIdx = idx + dir;
-    if (swapIdx < 0 || swapIdx >= rooms.length) return;
-    const a = rooms[idx], b = rooms[swapIdx];
-    const ao = a.order ?? idx, bo = b.order ?? swapIdx;
-    await Promise.all([
-      updateDoc(doc(db,"rooms",a.id), { order: bo }),
-      updateDoc(doc(db,"rooms",b.id), { order: ao }),
-    ]);
   };
 
   if (loading) return <div className="loading-page"><div className="spinner"/></div>;
@@ -549,20 +594,15 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
         <div className="empty-state"><div className="empty-icon">🏠</div><div className="empty-title">Aún no hay estancias</div><div className="empty-desc">Crea tu primera habitación</div></div>
       ) : (
         <div className="grid-2">
-          {rooms.map((room, idx) => (
+          {rooms.map(room => (
             <div key={room.id} className="card card-clickable room-card" onClick={()=>onNavigate("furniture",room)}>
               <span className="room-count">{furnitureCounts[room.id]||0} muebles</span>
               <span className="room-icon">{room.icon}</span>
               <div className="room-name">{room.name}</div>
               <div className="room-meta">Por {room.createdByName} · {formatDate(room.createdAt)}</div>
-              <div style={{display:"flex",gap:6,marginTop:14,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
-                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("furniture",room)}>Ver →</button>
-                <button className="btn btn-ghost btn-sm" onClick={()=>{setEditForm({name:room.name,icon:room.icon});setEditRoom(room);}}>Editar</button>
+              <div style={{display:"flex",gap:8,marginTop:14}} onClick={e=>e.stopPropagation()}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("furniture",room)}>Ver muebles →</button>
                 <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(room)}>Eliminar</button>
-                <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-                  <button className="btn-icon" style={{padding:"4px 8px",fontSize:12}} onClick={()=>moveRoom(idx,-1)} disabled={idx===0} title="Subir">↑</button>
-                  <button className="btn-icon" style={{padding:"4px 8px",fontSize:12}} onClick={()=>moveRoom(idx,1)} disabled={idx===rooms.length-1} title="Bajar">↓</button>
-                </div>
               </div>
             </div>
           ))}
@@ -570,19 +610,24 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
       )}
       {showAdd && (
         <Modal title="Nueva estancia" onClose={()=>setShowAdd(false)}>
-          <RoomForm form={form} setForm={setForm}/>
+          <div className="form-group">
+            <label className="form-label">Nombre</label>
+            <input className="form-input" placeholder="Ej: Salón, Dormitorio..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Icono</label>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {ROOM_ICONS.map(ic => (
+                <span key={ic} onClick={()=>setForm(f=>({...f,icon:ic}))}
+                  style={{fontSize:24,cursor:"pointer",padding:6,borderRadius:8,background:form.icon===ic?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${form.icon===ic?"var(--accent)":"var(--border)"}`}}>
+                  {ic}
+                </span>
+              ))}
+            </div>
+          </div>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowAdd(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleAdd}>Crear estancia</button>
-          </div>
-        </Modal>
-      )}
-      {editRoom && (
-        <Modal title="Editar estancia" onClose={()=>setEditRoom(null)}>
-          <RoomForm form={editForm} setForm={setEditForm}/>
-          <div className="modal-footer">
-            <button className="btn btn-ghost" onClick={()=>setEditRoom(null)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleEdit}>Guardar cambios</button>
           </div>
         </Modal>
       )}
@@ -591,32 +636,11 @@ const RoomsPage = ({ user, onToast, onNavigate }) => {
 };
 
 // ─── Furniture ────────────────────────────────────────────────────────────────
-const FurnitureForm = ({ form, setForm }) => (
-  <>
-    <div className="form-group">
-      <label className="form-label">Nombre</label>
-      <input className="form-input" placeholder="Ej: Armario grande, Cajón derecho..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
-    </div>
-    <div className="form-group">
-      <label className="form-label">Tipo</label>
-      <select className="form-input" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-        {FURNITURE_TYPES.map(t=><option key={t}>{t}</option>)}
-      </select>
-    </div>
-    <div className="form-group">
-      <label className="form-label">Descripción (opcional)</label>
-      <input className="form-input" placeholder="Ej: El de la derecha al entrar" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} />
-    </div>
-  </>
-);
-
 const FurniturePage = ({ user, room, onToast, onNavigate }) => {
   const [furniture, setFurniture] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [editFurniture, setEditFurniture] = useState(null);
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState({ name:"", type:"Armario", description:"" });
-  const [editForm, setEditForm] = useState({ name:"", type:"Armario", description:"" });
   const [itemCounts, setItemCounts] = useState({});
 
   useEffect(() => {
@@ -639,13 +663,6 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
     await addDoc(collection(db,"furniture"), { name:form.name.trim(), type:form.type, description:form.description, roomId:room.id, roomName:room.name, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
     await logHistory(user.uid, user.displayName, "Añadió mueble", `${form.name} en ${room.name}`);
     onToast("Mueble añadido"); setShowAdd(false); setForm({ name:"", type:"Armario", description:"" });
-  };
-
-  const handleEdit = async () => {
-    if (!editForm.name.trim()) return;
-    await updateDoc(doc(db,"furniture",editFurniture.id), { name:editForm.name.trim(), type:editForm.type, description:editForm.description, updatedAt:serverTimestamp() });
-    await logHistory(user.uid, user.displayName, "Editó mueble", editForm.name.trim());
-    onToast("Mueble actualizado"); setEditFurniture(null);
   };
 
   const handleDelete = async (f) => {
@@ -684,9 +701,8 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
               <div className="room-name" style={{fontSize:16}}>{f.name}</div>
               {f.description && <div className="room-meta" style={{marginTop:4}}>{f.description}</div>}
               <div className="room-meta" style={{marginTop:8}}>Por {f.createdByName} · {formatDate(f.createdAt)}</div>
-              <div style={{display:"flex",gap:6,marginTop:14,flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
-                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("items",room,f)}>Ver →</button>
-                <button className="btn btn-ghost btn-sm" onClick={()=>{setEditForm({name:f.name,type:f.type,description:f.description||""});setEditFurniture(f);}}>Editar</button>
+              <div style={{display:"flex",gap:8,marginTop:14}} onClick={e=>e.stopPropagation()}>
+                <button className="btn btn-ghost btn-sm" onClick={()=>onNavigate("items",room,f)}>Ver objetos →</button>
                 <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(f)}>Eliminar</button>
               </div>
             </div>
@@ -695,19 +711,23 @@ const FurniturePage = ({ user, room, onToast, onNavigate }) => {
       )}
       {showAdd && (
         <Modal title="Nuevo mueble" onClose={()=>setShowAdd(false)}>
-          <FurnitureForm form={form} setForm={setForm}/>
+          <div className="form-group">
+            <label className="form-label">Nombre</label>
+            <input className="form-input" placeholder="Ej: Armario grande, Cajón derecho..." value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Tipo</label>
+            <select className="form-input" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+              {FURNITURE_TYPES.map(t=><option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Descripción (opcional)</label>
+            <input className="form-input" placeholder="Ej: El de la derecha al entrar" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} />
+          </div>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowAdd(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleAdd}>Añadir mueble</button>
-          </div>
-        </Modal>
-      )}
-      {editFurniture && (
-        <Modal title="Editar mueble" onClose={()=>setEditFurniture(null)}>
-          <FurnitureForm form={editForm} setForm={setEditForm}/>
-          <div className="modal-footer">
-            <button className="btn btn-ghost" onClick={()=>setEditFurniture(null)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleEdit}>Guardar cambios</button>
           </div>
         </Modal>
       )}
@@ -724,17 +744,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   const [search, setSearch] = useState("");
   const [filterTag, setFilterTag] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [allRooms, setAllRooms] = useState([]);
-  const [roomFurniture, setRoomFurniture] = useState([]);
-  const [sortBy, setSortBy] = useState("reciente");
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [showBulkMove, setShowBulkMove] = useState(false);
-  const [bulkRoomId, setBulkRoomId] = useState("");
-  const [bulkFurnitureId, setBulkFurnitureId] = useState("");
-  const [bulkRoomFurniture, setBulkRoomFurniture] = useState([]);
-  const [lightboxUrl, setLightboxUrl] = useState("");
-  const [viewMode, setViewMode] = useState("cards");
-  const emptyForm = { name:"", description:"", tags:[], photoUrl:"", targetRoomId: room.id, targetFurnitureId: furniture.id };
+  const emptyForm = { name:"", description:"", tags:[], photoUrl:"" };
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
@@ -743,46 +753,17 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
     return unsub;
   }, [furniture.id]);
 
-  useEffect(() => {
-    getDocs(query(collection(db,"rooms"), orderBy("createdAt","asc")))
-      .then(snap => setAllRooms(snap.docs.map(d=>({id:d.id,...d.data()}))));
-  }, []);
-
-  useEffect(() => {
-    if (!form.targetRoomId) return;
-    getDocs(query(collection(db,"furniture"), where("roomId","==",form.targetRoomId), orderBy("createdAt","asc")))
-      .then(snap => setRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
-  }, [form.targetRoomId]);
-
   const filtered = items.filter(it => {
     const ms = !search || it.name.toLowerCase().includes(search.toLowerCase()) || (it.description||"").toLowerCase().includes(search.toLowerCase());
     const mt = !filterTag || (it.tags||[]).includes(filterTag);
     return ms && mt;
-  }).sort((a,b) => {
-    if (sortBy === "nombre-az") return (a.name||"").localeCompare(b.name||"");
-    if (sortBy === "nombre-za") return (b.name||"").localeCompare(a.name||"");
-    if (sortBy === "categoria") return ((a.tags||[])[0]||"").localeCompare((b.tags||[])[0]||"");
-    const ta = a.updatedAt?.toDate?.()?.getTime() || 0;
-    const tb = b.updatedAt?.toDate?.()?.getTime() || 0;
-    return tb - ta;
   });
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
     if (editItem) {
-      const targetRoom = allRooms.find(r => r.id === form.targetRoomId);
-      const targetFurniture = roomFurniture.find(f => f.id === form.targetFurnitureId);
-      const newRoomName = targetRoom?.name || editItem.roomName;
-      const newFurnitureName = targetFurniture?.name || editItem.furnitureName;
-      await updateDoc(doc(db,"items",editItem.id), {
-        name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl,
-        furnitureId: form.targetFurnitureId || editItem.furnitureId,
-        furnitureName: newFurnitureName,
-        roomId: form.targetRoomId || editItem.roomId,
-        roomName: newRoomName,
-        updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp()
-      });
-      await logHistory(user.uid, user.displayName, "Editó objeto", `"${form.name}" → ${newFurnitureName} (${newRoomName})`);
+      await updateDoc(doc(db,"items",editItem.id), { name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl, updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp() });
+      await logHistory(user.uid, user.displayName, "Editó objeto", `"${form.name}" en ${furniture.name} (${room.name})`);
       onToast("Objeto actualizado");
     } else {
       await addDoc(collection(db,"items"), { name:form.name.trim(), description:form.description, tags:form.tags, photoUrl:form.photoUrl, furnitureId:furniture.id, furnitureName:furniture.name, roomId:room.id, roomName:room.name, createdBy:user.uid, createdByName:user.displayName, updatedBy:user.uid, updatedByName:user.displayName, createdAt:serverTimestamp(), updatedAt:serverTimestamp() });
@@ -793,7 +774,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
   };
 
   const handleEdit = (item) => {
-    setForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"", targetRoomId:item.roomId, targetFurnitureId:item.furnitureId });
+    setForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"" });
     setEditItem(item); setShowAdd(true);
   };
 
@@ -802,25 +783,6 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
     await deleteDoc(doc(db,"items",item.id));
     await logHistory(user.uid, user.displayName, "Eliminó objeto", `"${item.name}" de ${furniture.name}`);
     onToast("Objeto eliminado");
-  };
-
-  useEffect(() => {
-    if (!bulkRoomId) return;
-    getDocs(query(collection(db,"furniture"), where("roomId","==",bulkRoomId), orderBy("createdAt","asc")))
-      .then(snap => setBulkRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
-  }, [bulkRoomId]);
-
-  const handleBulkMove = async () => {
-    if (!bulkFurnitureId) return;
-    const targetRoom = allRooms.find(r=>r.id===bulkRoomId);
-    const targetFurniture = bulkRoomFurniture.find(f=>f.id===bulkFurnitureId);
-    if (!targetRoom||!targetFurniture) return;
-    await Promise.all([...selectedIds].map(id =>
-      updateDoc(doc(db,"items",id), { furnitureId:bulkFurnitureId, furnitureName:targetFurniture.name, roomId:bulkRoomId, roomName:targetRoom.name, updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp() })
-    ));
-    await logHistory(user.uid, user.displayName, "Movió objetos", `${selectedIds.size} objetos → ${targetFurniture.name} (${targetRoom.name})`);
-    onToast(`${selectedIds.size} objetos movidos`);
-    setSelectedIds(new Set()); setShowBulkMove(false); setBulkRoomId(""); setBulkFurnitureId("");
   };
 
   const toggleTag = (tag) => setForm(f=>({ ...f, tags: f.tags.includes(tag) ? f.tags.filter(t=>t!==tag) : [...f.tags,tag] }));
@@ -841,7 +803,7 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
         <p className="page-subtitle">{room.icon} {room.name} · {furniture.type}</p>
       </div>
       <div className="toolbar">
-        <div className="search-wrapper" style={{flex:1,maxWidth:280}}>
+        <div className="search-wrapper" style={{flex:1,maxWidth:320}}>
           <span className="search-icon">🔍</span>
           <input className="form-input search-input" placeholder="Buscar objeto..." value={search} onChange={e=>setSearch(e.target.value)} />
         </div>
@@ -849,126 +811,31 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
           <option value="">Todas las categorías</option>
           {ITEM_TAGS.map(t=><option key={t}>{t}</option>)}
         </select>
-        <select className="form-input" style={{width:"auto"}} value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-          <option value="reciente">Más reciente</option>
-          <option value="nombre-az">Nombre A–Z</option>
-          <option value="nombre-za">Nombre Z–A</option>
-          <option value="categoria">Categoría</option>
-        </select>
         <div className="toolbar-right">
-          {selectedIds.size > 0 && (
-            <button className="btn btn-ghost" onClick={()=>{setBulkRoomId(room.id);setShowBulkMove(true);}}>
-              📦 Mover {selectedIds.size}
-            </button>
-          )}
-          <div className="view-toggle">
-            <button className={`view-toggle-btn ${viewMode==="cards"?"active":""}`} onClick={()=>setViewMode("cards")} title="Cards">⊞</button>
-            <button className={`view-toggle-btn ${viewMode==="table"?"active":""}`} onClick={()=>setViewMode("table")} title="Tabla">☰</button>
-          </div>
-          <button className="btn btn-primary" onClick={()=>{setForm(emptyForm);setEditItem(null);setShowAdd(true)}}>+ Añadir</button>
+          <button className="btn btn-primary" onClick={()=>{setForm(emptyForm);setEditItem(null);setShowAdd(true)}}>+ Añadir objeto</button>
         </div>
       </div>
       {filtered.length === 0 ? (
         <div className="empty-state"><div className="empty-icon">📦</div><div className="empty-title">{items.length===0?"Sin objetos aún":"Sin resultados"}</div></div>
-      ) : viewMode === "table" ? (
-        <div className="card" style={{padding:0,overflow:"hidden"}}>
-          <div className="table-wrap">
-            <table className="inv-table">
-              <thead>
-                <tr>
-                  <th style={{width:32}}><input type="checkbox" style={{accentColor:"var(--accent)"}} checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={()=>setSelectedIds(selectedIds.size===filtered.length?new Set():new Set(filtered.map(i=>i.id)))}/></th>
-                  <th>Objeto</th>
-                  <th>Categorías</th>
-                  <th>Editado por</th>
-                  <th>Fecha</th>
-                  <th style={{width:80}}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(item => {
-                  const sel = selectedIds.has(item.id);
-                  return (
-                    <tr key={item.id} style={{background:sel?"var(--accent-bg)":""}}>
-                      <td><input type="checkbox" checked={sel} style={{accentColor:"var(--accent)"}} onChange={()=>setSelectedIds(s=>{const n=new Set(s);sel?n.delete(item.id):n.add(item.id);return n;})}/></td>
-                      <td>
-                        <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          {item.photoUrl
-                            ? <img src={item.photoUrl} alt="" style={{width:36,height:36,borderRadius:6,objectFit:"cover",cursor:"zoom-in",flexShrink:0}} onClick={()=>setLightboxUrl(item.photoUrl)}/>
-                            : <div style={{width:36,height:36,background:"var(--bg3)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>📦</div>
-                          }
-                          <div>
-                            <div style={{fontWeight:500,fontSize:13.5}}>{item.name}</div>
-                            {item.description && <div style={{fontSize:11,color:"var(--text3)"}}>{item.description}</div>}
-                          </div>
-                        </div>
-                      </td>
-                      <td>{(item.tags||[]).length>0?<div style={{display:"flex",flexWrap:"wrap",gap:3}}>{item.tags.map(t=><span key={t} className="tag tag-accent" style={{fontSize:10,padding:"2px 7px"}}>{t}</span>)}</div>:<span style={{color:"var(--text3)"}}>—</span>}</td>
-                      <td style={{color:"var(--text2)",fontSize:12}}>{item.updatedByName||item.createdByName}</td>
-                      <td style={{color:"var(--text3)",fontSize:12,whiteSpace:"nowrap"}}>{formatDate(item.updatedAt)}</td>
-                      <td>
-                        <div style={{display:"flex",gap:4}}>
-                          <button className="btn btn-ghost btn-sm" onClick={()=>handleEdit(item)}>✏️</button>
-                          <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
       ) : (
         <div className="grid-3">
-          {filtered.map(item => {
-            const sel = selectedIds.has(item.id);
-            return (
-              <div key={item.id} className="card" style={{outline:sel?"2px solid var(--accent)":"none"}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-                  <input type="checkbox" checked={sel} onChange={()=>setSelectedIds(s=>{const n=new Set(s);sel?n.delete(item.id):n.add(item.id);return n;})} style={{width:16,height:16,cursor:"pointer",accentColor:"var(--accent)"}}/>
-                  <span style={{flex:1}}/>
-                </div>
-                <div className="item-photo" style={{cursor:item.photoUrl?"zoom-in":"default"}} onClick={()=>item.photoUrl&&setLightboxUrl(item.photoUrl)}>
-                  {item.photoUrl ? <img src={item.photoUrl} alt={item.name}/> : "📦"}
-                </div>
-                <div className="item-name">{item.name}</div>
-                {item.description && <div className="item-location">{item.description}</div>}
-                {(item.tags||[]).length>0 && <div className="item-tags">{item.tags.map(t=><span key={t} className="tag tag-accent">{t}</span>)}</div>}
-                <div className="item-meta">
-                  <span>✏️ {item.updatedByName||item.createdByName}</span>
-                  <span>{formatDate(item.updatedAt)}</span>
-                </div>
-                <div style={{display:"flex",gap:6,marginTop:12}}>
-                  <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>handleEdit(item)}>Editar</button>
-                  <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
-                </div>
+          {filtered.map(item => (
+            <div key={item.id} className="card">
+              <div className="item-photo">{item.photoUrl ? <img src={item.photoUrl} alt={item.name}/> : "📦"}</div>
+              <div className="item-name">{item.name}</div>
+              {item.description && <div className="item-location">{item.description}</div>}
+              {(item.tags||[]).length>0 && <div className="item-tags">{item.tags.map(t=><span key={t} className="tag tag-accent">{t}</span>)}</div>}
+              <div className="item-meta">
+                <span>✏️ {item.updatedByName||item.createdByName}</span>
+                <span>{formatDate(item.updatedAt)}</span>
               </div>
-            );
-          })}
+              <div style={{display:"flex",gap:6,marginTop:12}}>
+                <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>handleEdit(item)}>Editar</button>
+                <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(item)}>✕</button>
+              </div>
+            </div>
+          ))}
         </div>
-      )}
-      {lightboxUrl && <ImageLightbox url={lightboxUrl} onClose={()=>setLightboxUrl("")}/>}
-      {showBulkMove && (
-        <Modal title={`Mover ${selectedIds.size} objetos`} onClose={()=>{setShowBulkMove(false);setBulkRoomId("");setBulkFurnitureId("");}}>
-          <div className="form-group">
-            <label className="form-label">Estancia destino</label>
-            <select className="form-input" value={bulkRoomId} onChange={e=>{setBulkRoomId(e.target.value);setBulkFurnitureId("");}}>
-              <option value="">— Selecciona estancia —</option>
-              {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Mueble destino</label>
-            <select className="form-input" value={bulkFurnitureId} onChange={e=>setBulkFurnitureId(e.target.value)} disabled={!bulkRoomId}>
-              <option value="">— Selecciona mueble —</option>
-              {bulkRoomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
-          </div>
-          <div className="modal-footer">
-            <button className="btn btn-ghost" onClick={()=>{setShowBulkMove(false);setBulkRoomId("");setBulkFurnitureId("");}}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleBulkMove} disabled={!bulkFurnitureId}>Mover todos</button>
-          </div>
-        </Modal>
       )}
       {showAdd && (
         <Modal title={editItem?"Editar objeto":"Nuevo objeto"} onClose={()=>{setShowAdd(false);setEditItem(null);}} large>
@@ -988,23 +855,6 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
               ))}
             </div>
           </div>
-          {editItem && (
-            <>
-              <div className="form-group">
-                <label className="form-label">Estancia</label>
-                <select className="form-input" value={form.targetRoomId} onChange={e=>setForm(f=>({...f,targetRoomId:e.target.value,targetFurnitureId:""}))}>
-                  {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Mueble</label>
-                <select className="form-input" value={form.targetFurnitureId} onChange={e=>setForm(f=>({...f,targetFurnitureId:e.target.value}))}>
-                  <option value="">— Selecciona mueble —</option>
-                  {roomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-              </div>
-            </>
-          )}
           <div className="form-group">
             <label className="form-label">Foto (opcional)</label>
             <PhotoUpload value={form.photoUrl} onChange={url=>setForm(f=>({...f,photoUrl:url}))} uploading={uploading} setUploading={setUploading} />
@@ -1022,29 +872,12 @@ const ItemsPage = ({ user, room, furniture, onToast, onNavigate }) => {
 };
 
 // ─── Search ───────────────────────────────────────────────────────────────────
-const SearchPage = ({ user, onToast, onNavigate }) => {
+const SearchPage = ({ onNavigate }) => {
   const [query_, setQuery_] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [filterTag, setFilterTag] = useState("");
-  const [editItem, setEditItem] = useState(null);
-  const [editForm, setEditForm] = useState({ name:"", description:"", tags:[], photoUrl:"", targetRoomId:"", targetFurnitureId:"" });
-  const [uploading, setUploading] = useState(false);
-  const [allRooms, setAllRooms] = useState([]);
-  const [roomFurniture, setRoomFurniture] = useState([]);
-  const [lightboxUrl, setLightboxUrl] = useState("");
-
-  useEffect(() => {
-    getDocs(query(collection(db,"rooms"), orderBy("createdAt","asc")))
-      .then(snap => setAllRooms(snap.docs.map(d=>({id:d.id,...d.data()}))));
-  }, []);
-
-  useEffect(() => {
-    if (!editForm.targetRoomId) return;
-    getDocs(query(collection(db,"furniture"), where("roomId","==",editForm.targetRoomId), orderBy("createdAt","asc")))
-      .then(snap => setRoomFurniture(snap.docs.map(d=>({id:d.id,...d.data()}))));
-  }, [editForm.targetRoomId]);
 
   const handleSearch = async () => {
     if (!query_.trim()) return;
@@ -1061,31 +894,6 @@ const SearchPage = ({ user, onToast, onNavigate }) => {
     ).filter(it => !filterTag || (it.tags||[]).includes(filterTag)));
     setLoading(false);
   };
-
-  const openEdit = (item) => {
-    setEditForm({ name:item.name, description:item.description||"", tags:item.tags||[], photoUrl:item.photoUrl||"", targetRoomId:item.roomId, targetFurnitureId:item.furnitureId });
-    setEditItem(item);
-  };
-
-  const handleSave = async () => {
-    if (!editForm.name.trim()) return;
-    const targetRoom = allRooms.find(r=>r.id===editForm.targetRoomId);
-    const targetFurniture = roomFurniture.find(f=>f.id===editForm.targetFurnitureId);
-    await updateDoc(doc(db,"items",editItem.id), {
-      name:editForm.name.trim(), description:editForm.description, tags:editForm.tags, photoUrl:editForm.photoUrl,
-      furnitureId: editForm.targetFurnitureId || editItem.furnitureId,
-      furnitureName: targetFurniture?.name || editItem.furnitureName,
-      roomId: editForm.targetRoomId || editItem.roomId,
-      roomName: targetRoom?.name || editItem.roomName,
-      updatedBy:user.uid, updatedByName:user.displayName, updatedAt:serverTimestamp()
-    });
-    await logHistory(user.uid, user.displayName, "Editó objeto", `"${editForm.name}" → ${targetFurniture?.name||editItem.furnitureName}`);
-    onToast("Objeto actualizado");
-    setResults(rs => rs.map(r => r.id===editItem.id ? {...r, ...editForm, furnitureName:targetFurniture?.name||r.furnitureName, roomName:targetRoom?.name||r.roomName} : r));
-    setEditItem(null);
-  };
-
-  const toggleEditTag = (tag) => setEditForm(f=>({ ...f, tags: f.tags.includes(tag) ? f.tags.filter(t=>t!==tag) : [...f.tags,tag] }));
 
   return (
     <div className="fade-in">
@@ -1114,7 +922,7 @@ const SearchPage = ({ user, onToast, onNavigate }) => {
               <div key={item.id} className="card">
                 <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
                   {item.photoUrl
-                    ? <img src={item.photoUrl} alt={item.name} style={{width:64,height:64,objectFit:"cover",borderRadius:8,flexShrink:0,cursor:"zoom-in"}} onClick={()=>setLightboxUrl(item.photoUrl)}/>
+                    ? <img src={item.photoUrl} alt={item.name} style={{width:64,height:64,objectFit:"cover",borderRadius:8,flexShrink:0}}/>
                     : <div style={{width:64,height:64,background:"var(--bg3)",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>📦</div>
                   }
                   <div style={{flex:1,minWidth:0}}>
@@ -1131,51 +939,10 @@ const SearchPage = ({ user, onToast, onNavigate }) => {
                   <span>✏️ {item.updatedByName}</span>
                   <span>{formatDate(item.updatedAt)}</span>
                 </div>
-                <button className="btn btn-ghost btn-sm" style={{width:"100%",marginTop:10,justifyContent:"center"}} onClick={()=>openEdit(item)}>Editar</button>
               </div>
             ))}
           </div>
         </>
-      )}
-      {lightboxUrl && <ImageLightbox url={lightboxUrl} onClose={()=>setLightboxUrl("")}/>}
-      {editItem && (
-        <Modal title="Editar objeto" onClose={()=>setEditItem(null)} large>
-          <div className="form-group">
-            <label className="form-label">Nombre</label>
-            <input className="form-input" value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))} autoFocus />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Descripción</label>
-            <input className="form-input" value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))} />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Categorías</label>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-              {ITEM_TAGS.map(tag=><span key={tag} className={`tag ${editForm.tags.includes(tag)?"tag-accent":""}`} style={{cursor:"pointer"}} onClick={()=>toggleEditTag(tag)}>{tag}</span>)}
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Estancia</label>
-            <select className="form-input" value={editForm.targetRoomId} onChange={e=>setEditForm(f=>({...f,targetRoomId:e.target.value,targetFurnitureId:""}))}>
-              {allRooms.map(r=><option key={r.id} value={r.id}>{r.icon} {r.name}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Mueble</label>
-            <select className="form-input" value={editForm.targetFurnitureId} onChange={e=>setEditForm(f=>({...f,targetFurnitureId:e.target.value}))}>
-              <option value="">— Selecciona mueble —</option>
-              {roomFurniture.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Foto</label>
-            <PhotoUpload value={editForm.photoUrl} onChange={url=>setEditForm(f=>({...f,photoUrl:url}))} uploading={uploading} setUploading={setUploading}/>
-          </div>
-          <div className="modal-footer">
-            <button className="btn btn-ghost" onClick={()=>setEditItem(null)}>Cancelar</button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={uploading}>{uploading?<span className="spinner"/>:"Guardar cambios"}</button>
-          </div>
-        </Modal>
       )}
     </div>
   );
@@ -1352,60 +1119,618 @@ const HistoryPage = () => {
   );
 };
 
-// ─── Profile Modal ────────────────────────────────────────────────────────────
-const ProfileModal = ({ user, onClose, onToast }) => {
-  const [name, setName] = useState(user.displayName || "");
-  const [saving, setSaving] = useState(false);
-  const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
-  const initial = (user.displayName||user.email||"?")[0].toUpperCase();
+// ─── Calendar ─────────────────────────────────────────────────────────────────
+const CalendarPage = ({ user, onToast }) => {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [cursor, setCursor] = useState(new Date());
+  const [showAdd, setShowAdd] = useState(false);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [editEvent, setEditEvent] = useState(null);
+  const emptyForm = { title:"", date:isoDate(new Date()), description:"", color:"accent" };
+  const [form, setForm] = useState(emptyForm);
 
-  const handleSave = async () => {
-    if (!name.trim()) return;
-    setSaving(true);
-    try {
-      await updateProfile(auth.currentUser, { displayName: name.trim() });
-      onToast("Nombre actualizado");
-      onClose();
-    } catch(e) { onToast("Error al guardar", "error"); }
-    finally { setSaving(false); }
+  useEffect(() => {
+    const q = query(collection(db,"events"), orderBy("date","asc"));
+    const unsub = onSnapshot(q, snap => { setEvents(snap.docs.map(d=>({id:d.id,...d.data()}))); setLoading(false); });
+    return unsub;
+  }, []);
+
+  const year = cursor.getFullYear(), month = cursor.getMonth();
+  const grid = buildCalendarGrid(year, month);
+  const today = new Date();
+
+  const eventsByDate = events.reduce((acc, e) => {
+    (acc[e.date] = acc[e.date] || []).push(e);
+    return acc;
+  }, {});
+
+  const upcoming = events.filter(e => e.date >= isoDate(today)).slice(0, 8);
+
+  const prevMonth = () => setCursor(new Date(year, month-1, 1));
+  const nextMonth = () => setCursor(new Date(year, month+1, 1));
+
+  const openAddForDay = (d) => {
+    setForm({ ...emptyForm, date: isoDate(d) });
+    setEditEvent(null);
+    setShowAdd(true);
   };
 
+  const handleSave = async () => {
+    if (!form.title.trim() || !form.date) return onToast("Pon título y fecha","error");
+    const colorObj = EVENT_COLORS.find(c=>c.id===form.color) || EVENT_COLORS[0];
+    if (editEvent) {
+      await updateDoc(doc(db,"events",editEvent.id), { title:form.title.trim(), date:form.date, description:form.description, color:form.color });
+      await logHistory(user.uid, user.displayName, "Editó evento", `"${form.title}" (${form.date})`);
+      onToast("Evento actualizado");
+    } else {
+      await addDoc(collection(db,"events"), { title:form.title.trim(), date:form.date, description:form.description, color:form.color, createdBy:user.uid, createdByName:user.displayName, createdAt:serverTimestamp() });
+      await logHistory(user.uid, user.displayName, "Añadió evento", `"${form.title}" (${form.date})`);
+      onToast("Evento añadido");
+    }
+    setShowAdd(false); setEditEvent(null); setForm(emptyForm);
+  };
+
+  const handleEdit = (ev) => {
+    setForm({ title:ev.title, date:ev.date, description:ev.description||"", color:ev.color||"accent" });
+    setEditEvent(ev); setShowAdd(true);
+  };
+
+  const handleDelete = async (ev) => {
+    if (!confirm(`¿Eliminar "${ev.title}"?`)) return;
+    await deleteDoc(doc(db,"events",ev.id));
+    await logHistory(user.uid, user.displayName, "Eliminó evento", ev.title);
+    onToast("Evento eliminado");
+    setSelectedDay(null);
+  };
+
+  if (loading) return <div className="loading-page"><div className="spinner"/></div>;
+
   return (
-    <Modal title="Mi perfil" onClose={onClose}>
-      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:24}}>
-        <div className="user-avatar" style={{background:color,width:48,height:48,fontSize:20}}>{initial}</div>
-        <div>
-          <div style={{fontWeight:500}}>{user.displayName||user.email}</div>
-          <div style={{fontSize:12,color:"var(--text3)"}}>{user.email}</div>
+    <div className="fade-in">
+      <div className="page-header">
+        <h1 className="page-title">Calendario</h1>
+        <p className="page-subtitle">Eventos y fechas importantes de la casa</p>
+      </div>
+
+      <div className="cal-header">
+        <div className="cal-nav">
+          <button className="btn-icon" onClick={prevMonth}>←</button>
+          <span className="cal-month-label">{MONTHS_ES[month]} {year}</span>
+          <button className="btn-icon" onClick={nextMonth}>→</button>
         </div>
+        <button className="btn btn-primary" onClick={()=>openAddForDay(today)}>+ Nuevo evento</button>
       </div>
-      <div className="form-group">
-        <label className="form-label">Nombre</label>
-        <input className="form-input" value={name} onChange={e=>setName(e.target.value)} autoFocus
-          onKeyDown={e=>e.key==="Enter"&&handleSave()} />
+
+      <div className="cal-grid">
+        {WEEKDAYS_ES.map(w => <div key={w} className="cal-weekday">{w}</div>)}
+        {grid.map((d, i) => {
+          const inMonth = d.getMonth() === month;
+          const dStr = isoDate(d);
+          const dayEvents = eventsByDate[dStr] || [];
+          return (
+            <div key={i} className={`cal-day ${inMonth?"":"other-month"} ${isSameDay(d,today)?"today":""}`} onClick={()=>dayEvents.length ? setSelectedDay(dStr) : openAddForDay(d)}>
+              <span className="cal-day-num">{d.getDate()}</span>
+              {dayEvents.length > 0 && (
+                <div className="cal-day-dots">
+                  {dayEvents.slice(0,4).map(ev => (
+                    <span key={ev.id} className="cal-dot" style={{background:(EVENT_COLORS.find(c=>c.id===ev.color)||EVENT_COLORS[0]).color}} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      <div className="modal-footer" style={{justifyContent:"space-between"}}>
-        <button className="btn btn-danger" onClick={()=>{signOut(auth);onClose();}}>Cerrar sesión</button>
-        <div style={{display:"flex",gap:10}}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving?<span className="spinner"/>:"Guardar"}
-          </button>
+
+      <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:4}}>Próximos eventos</h2>
+      {upcoming.length === 0 ? (
+        <div className="empty-state"><div className="empty-icon">📅</div><div className="empty-title">Sin eventos próximos</div></div>
+      ) : (
+        <div className="upcoming-list">
+          {upcoming.map(ev => {
+            const colorObj = EVENT_COLORS.find(c=>c.id===ev.color) || EVENT_COLORS[0];
+            const d = new Date(ev.date + "T00:00:00");
+            return (
+              <div key={ev.id} className="card card-sm event-row" onClick={()=>handleEdit(ev)} style={{cursor:"pointer"}}>
+                <div className="event-color-bar" style={{background:colorObj.color}} />
+                <div className="event-date-badge">
+                  <span className="day">{d.getDate()}</span>
+                  <span className="mon">{MONTHS_ES[d.getMonth()].slice(0,3)}</span>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="font-medium" style={{fontSize:14}}>{ev.title}</div>
+                  {ev.description && <div className="text-xs text-muted">{ev.description}</div>}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      </div>
-    </Modal>
+      )}
+
+      {selectedDay && (
+        <Modal title={new Date(selectedDay+"T00:00:00").toLocaleDateString("es-ES",{day:"numeric",month:"long",year:"numeric"})} onClose={()=>setSelectedDay(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:16}}>
+            {(eventsByDate[selectedDay]||[]).map(ev => {
+              const colorObj = EVENT_COLORS.find(c=>c.id===ev.color) || EVENT_COLORS[0];
+              return (
+                <div key={ev.id} className="card card-sm" style={{borderLeft:`3px solid ${colorObj.color}`}}>
+                  <div className="font-medium">{ev.title}</div>
+                  {ev.description && <div className="text-sm text-muted mt-1">{ev.description}</div>}
+                  <div style={{display:"flex",gap:6,marginTop:10}}>
+                    <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>{setSelectedDay(null);handleEdit(ev);}}>Editar</button>
+                    <button className="btn btn-danger btn-sm" onClick={()=>handleDelete(ev)}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <button className="btn btn-primary w-full" style={{justifyContent:"center",width:"100%"}} onClick={()=>{openAddForDay(new Date(selectedDay+"T00:00:00"));setSelectedDay(null);}}>+ Añadir otro evento este día</button>
+        </Modal>
+      )}
+
+      {showAdd && (
+        <Modal title={editEvent ? "Editar evento" : "Nuevo evento"} onClose={()=>{setShowAdd(false);setEditEvent(null);}}>
+          <div className="form-group">
+            <label className="form-label">Título</label>
+            <input className="form-input" placeholder="Ej: Cumpleaños de Ana, Revisión caldera..." value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Fecha</label>
+            <input className="form-input" type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Descripción (opcional)</label>
+            <input className="form-input" placeholder="Detalles del evento..." value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Color</label>
+            <div className="color-picker">
+              {EVENT_COLORS.map(c => (
+                <div key={c.id} className={`color-dot ${form.color===c.id?"selected":""}`} style={{background:c.color}} onClick={()=>setForm(f=>({...f,color:c.id}))} title={c.label} />
+              ))}
+            </div>
+          </div>
+          <div className="modal-footer">
+            {editEvent && <button className="btn btn-danger" onClick={()=>handleDelete(editEvent)} style={{marginRight:"auto"}}>Eliminar</button>}
+            <button className="btn btn-ghost" onClick={()=>{setShowAdd(false);setEditEvent(null);}}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSave}>{editEvent?"Guardar cambios":"Añadir evento"}</button>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 };
 
-// ─── Sidebar ──────────────────────────────────────────────────────────────────
+// ─── Book Club ────────────────────────────────────────────────────────────────
+const BOOK_SPINE_COLORS = ["#e8715a","#5a9fe8","#5ae87a","#e8c95a","#c25ae8"];
+
+const BookClubPage = ({ user, onToast }) => {
+  const [proposals, setProposals] = useState([]); // status: proposed | pending
+  const [current, setCurrent] = useState(null);
+  const [pastBooks, setPastBooks] = useState([]);
+  const [ratings, setRatings] = useState([]); // all ratings, filtered per book in UI
+  const [loading, setLoading] = useState(true);
+  const [showPropose, setShowPropose] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [showFinish, setShowFinish] = useState(false);
+  const [showHistoryBook, setShowHistoryBook] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [spinResult, setSpinResult] = useState(null);
+  const [spinPool, setSpinPool] = useState([]);
+  const [proposalForm, setProposalForm] = useState({ title:"", author:"", pages:"" });
+  const [setupForm, setSetupForm] = useState({ days:"21" });
+  const [finishForm, setFinishForm] = useState({ rating:0, comment:"" });
+
+  useEffect(() => {
+    const unsub1 = onSnapshot(query(collection(db,"bookclubProposals"), orderBy("createdAt","asc")), snap => {
+      setProposals(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    const unsub2 = onSnapshot(doc(db,"bookclub","current"), snap => {
+      setCurrent(snap.exists() ? snap.data() : null);
+      setLoading(false);
+    });
+    const unsub3 = onSnapshot(query(collection(db,"bookclubHistory"), orderBy("finishedAt","desc")), snap => {
+      setPastBooks(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    const unsub4 = onSnapshot(collection(db,"bookclubRatings"), snap => {
+      setRatings(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+  }, []);
+
+  const pendingProposals = proposals.filter(p => p.status === "pending"); // lost a previous draw, waiting their turn
+  const myProposal = proposals.find(p => p.proposedBy === user.uid);
+  const isReading = !!(current && current.title);
+
+  // Pool to draw from: if there's a current book being read, you can't draw again.
+  // Drawing happens from whichever proposals exist (2 or 3), combining fresh + pending.
+  const drawPool = proposals; // both pending and freshly proposed are eligible once it's draw time
+  const canDraw = !isReading && drawPool.length >= 2;
+
+  const handlePropose = async () => {
+    if (!proposalForm.title.trim() || !proposalForm.pages) return onToast("Pon título y número de páginas","error");
+    if (myProposal && myProposal.status !== "pending") {
+      await updateDoc(doc(db,"bookclubProposals",myProposal.id), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), pages:Number(proposalForm.pages) });
+      onToast("Propuesta actualizada");
+    } else if (!myProposal) {
+      await addDoc(collection(db,"bookclubProposals"), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), pages:Number(proposalForm.pages), proposedBy:user.uid, proposedByName:user.displayName, status:"proposed", createdAt:serverTimestamp() });
+      onToast("Libro propuesto");
+    } else {
+      return onToast("Tu libro ya está en espera de turno, no se puede editar ahora","error");
+    }
+    setShowPropose(false); setProposalForm({ title:"", author:"", pages:"" });
+  };
+
+  const handleRemoveProposal = async (p) => {
+    if (p.status === "pending") return onToast("No puedes quitar un libro que ya está en la rotación","error");
+    if (!confirm(`¿Quitar "${p.title}" de las propuestas?`)) return;
+    await deleteDoc(doc(db,"bookclubProposals",p.id));
+    onToast("Propuesta eliminada");
+  };
+
+  const handleSpin = () => {
+    if (!canDraw) return;
+    setSpinning(true);
+    setSpinResult(null);
+    setSpinPool(drawPool);
+    let count = 0;
+    const interval = setInterval(() => {
+      setSpinResult(drawPool[Math.floor(Math.random()*drawPool.length)]);
+      count++;
+      if (count > 14) {
+        clearInterval(interval);
+        const winner = drawPool[Math.floor(Math.random()*drawPool.length)];
+        setSpinResult(winner);
+        setSpinning(false);
+        setShowSetup(true);
+      }
+    }, 120);
+  };
+
+  const handleConfirmSetup = async () => {
+    const days = Number(setupForm.days);
+    if (!days || days < 1) return onToast("Pon un número de días válido","error");
+    const start = new Date();
+    const end = new Date(); end.setDate(start.getDate() + days);
+    const milestones = generateMilestones(spinResult.pages, start, end);
+
+    await setDoc(doc(db,"bookclub","current"), {
+      title: spinResult.title, author: spinResult.author, totalPages: spinResult.pages,
+      proposedByName: spinResult.proposedByName,
+      startDate: isoDate(start), endDate: isoDate(end),
+      milestones, chosenAt: serverTimestamp(),
+      roundBooks: spinPool.map(p=>({title:p.title, proposedByName:p.proposedByName})),
+    });
+
+    // Winner leaves the proposals pool. The rest become "pending" — waiting their turn, kept until read.
+    await deleteDoc(doc(db,"bookclubProposals",spinResult.id));
+    for (const p of spinPool) {
+      if (p.id !== spinResult.id) {
+        await updateDoc(doc(db,"bookclubProposals",p.id), { status:"pending" });
+      }
+    }
+
+    await logHistory(user.uid, user.displayName, "Sorteó libro", `"${spinResult.title}" elegido para el club`);
+    onToast("¡Libro elegido! Plazos generados");
+    setShowSetup(false); setSpinResult(null); setSpinPool([]);
+  };
+
+  const toggleMilestone = async (idx) => {
+    const updated = [...current.milestones];
+    updated[idx] = { ...updated[idx], done: !updated[idx].done };
+    await updateDoc(doc(db,"bookclub","current"), { milestones: updated });
+  };
+
+  const handleFinishBook = async () => {
+    if (!finishForm.rating) return onToast("Pon tu puntuación antes de terminar","error");
+    const historyRef = await addDoc(collection(db,"bookclubHistory"), {
+      ...current, finishedAt: serverTimestamp(), startedAt: current.chosenAt || null,
+    });
+    await addDoc(collection(db,"bookclubRatings"), {
+      bookHistoryId: historyRef.id, bookTitle: current.title,
+      userId: user.uid, userName: user.displayName,
+      rating: finishForm.rating, comment: finishForm.comment.trim(),
+      createdAt: serverTimestamp(),
+    });
+    await setDoc(doc(db,"bookclub","current"), {});
+    await logHistory(user.uid, user.displayName, "Terminó libro", current.title);
+    onToast("¡Felicidades por terminarlo! 📚");
+    setShowFinish(false); setFinishForm({ rating:0, comment:"" });
+  };
+
+  const handleRateExisting = async (bookHistoryId, bookTitle) => {
+    const existing = ratings.find(r => r.bookHistoryId === bookHistoryId && r.userId === user.uid);
+    if (existing) return onToast("Ya has puntuado este libro","error");
+    if (!finishForm.rating) return onToast("Pon tu puntuación","error");
+    await addDoc(collection(db,"bookclubRatings"), {
+      bookHistoryId, bookTitle, userId: user.uid, userName: user.displayName,
+      rating: finishForm.rating, comment: finishForm.comment.trim(), createdAt: serverTimestamp(),
+    });
+    onToast("Puntuación guardada");
+    setFinishForm({ rating:0, comment:"" });
+  };
+
+  if (loading) return <div className="loading-page"><div className="spinner"/></div>;
+
+  const doneCount = current?.milestones?.filter(m=>m.done).length || 0;
+  const totalMilestones = current?.milestones?.length || 0;
+  const progressPct = totalMilestones ? Math.round((doneCount/totalMilestones)*100) : 0;
+
+  const StarPicker = ({ value, onChange }) => (
+    <div style={{display:"flex",gap:4}}>
+      {[1,2,3,4,5].map(n => (
+        <span key={n} onClick={()=>onChange(n)} style={{fontSize:26,cursor:"pointer",color: n<=value ? "var(--yellow)" : "var(--bg4)"}}>★</span>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="fade-in">
+      <div className="page-header">
+        <h1 className="page-title">Club de lectura</h1>
+        <p className="page-subtitle">Proponed libros, sorteamos y leemos los 3, por turnos</p>
+      </div>
+
+      {isReading ? (
+        <>
+          <div className="card" style={{marginBottom:24}}>
+            <div className="book-card">
+              <div className="book-spine" style={{background:BOOK_SPINE_COLORS[0]}}>📖</div>
+              <div style={{flex:1}}>
+                <div className="text-xs text-muted" style={{textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Leyendo ahora · propuesto por {current.proposedByName}</div>
+                <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:500}}>{current.title}</div>
+                {current.author && <div className="text-sm text-muted mt-1">{current.author}</div>}
+                <div className="text-xs text-muted mt-2">{current.totalPages} páginas · hasta {formatDate(current.endDate)}</div>
+                <div style={{marginTop:14}}>
+                  <div className="flex justify-between" style={{marginBottom:6}}>
+                    <span className="text-xs text-muted">{doneCount}/{totalMilestones} hitos completados</span>
+                    <span className="text-xs font-medium" style={{color:"var(--accent)"}}>{progressPct}%</span>
+                  </div>
+                  <div className="progress-track"><div className="progress-fill" style={{width:`${progressPct}%`}} /></div>
+                </div>
+              </div>
+            </div>
+            <button className="btn btn-ghost btn-sm" style={{marginTop:16}} onClick={()=>setShowFinish(true)}>✓ Marcar como terminado</button>
+          </div>
+
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginBottom:12}}>Plazos de lectura</h2>
+          <div className="card">
+            {current.milestones.map((m, idx) => {
+              const overdue = !m.done && m.date < isoDate(new Date());
+              return (
+                <div key={idx} className="milestone-row">
+                  <div className={`milestone-check ${m.done?"done":""} ${overdue?"overdue":""}`} onClick={()=>toggleMilestone(idx)}>
+                    {m.done ? "✓" : ""}
+                  </div>
+                  <div className="milestone-info">
+                    <div className={`milestone-label ${m.done?"done-text":""}`}>{m.label}</div>
+                    <div className="milestone-date">{formatDate(m.date)} {overdue ? "· atrasado" : ""}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {pendingProposals.length > 0 && (
+            <>
+              <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>En espera de turno</h2>
+              <div className="grid-3">
+                {pendingProposals.map(p => (
+                  <div key={p.id} className="card card-sm">
+                    <div className="font-medium" style={{fontSize:14}}>{p.title}</div>
+                    {p.author && <div className="text-xs text-muted">{p.author}</div>}
+                    <div className="text-xs text-muted mt-1">{p.pages} páginas · propuesto por {p.proposedByName}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="grid-3" style={{marginBottom:8}}>
+            {[0,1,2].map(i => {
+              const p = proposals[i];
+              const isMine = p && p.proposedBy === user.uid;
+              return (
+                <div key={i} className={`proposal-slot ${p?"filled":""}`}>
+                  {p ? (
+                    <>
+                      <div className="proposal-avatar" style={{background:USER_COLORS[i%USER_COLORS.length]}}>{p.proposedByName[0].toUpperCase()}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div className="font-medium" style={{fontSize:14}}>{p.title}</div>
+                        {p.author && <div className="text-xs text-muted">{p.author}</div>}
+                        <div className="text-xs text-muted">{p.pages} páginas · {p.proposedByName}</div>
+                        {p.status === "pending" && <span className="tag tag-blue" style={{marginTop:4}}>En espera de turno</span>}
+                      </div>
+                      {isMine && p.status !== "pending" && <button className="btn-icon" style={{fontSize:11,padding:"4px 8px"}} onClick={()=>handleRemoveProposal(p)}>✕</button>}
+                    </>
+                  ) : (
+                    <div className="text-sm text-muted" style={{textAlign:"center",width:"100%"}}>Esperando propuesta...</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{marginTop:20,display:"flex",gap:10,flexWrap:"wrap"}}>
+            {!myProposal ? (
+              <button className="btn btn-primary" onClick={()=>setShowPropose(true)}>+ Proponer mi libro</button>
+            ) : myProposal.status !== "pending" ? (
+              <button className="btn btn-ghost" onClick={()=>{setProposalForm({title:myProposal.title,author:myProposal.author||"",pages:String(myProposal.pages)});setShowPropose(true);}}>Editar mi propuesta</button>
+            ) : null}
+          </div>
+
+          {canDraw && (
+            <div className="card roulette-wrap" style={{marginTop:28}}>
+              <div className={`roulette-book ${spinning?"roulette-spinning":""}`}>📚</div>
+              {spinResult && !spinning && (
+                <div style={{marginBottom:16}}>
+                  <div className="text-xs text-muted" style={{textTransform:"uppercase",letterSpacing:0.5}}>Elegido</div>
+                  <div style={{fontFamily:"var(--font-display)",fontSize:22,fontWeight:500,marginTop:4}}>{spinResult.title}</div>
+                </div>
+              )}
+              {spinning && <div className="text-muted" style={{marginBottom:16}}>{spinResult?.title || "Sorteando..."}</div>}
+              {!spinResult && (
+                <>
+                  <div style={{fontFamily:"var(--font-display)",fontSize:18,marginBottom:6}}>
+                    {drawPool.length >= 3 ? "¡Las 3 propuestas están listas!" : "Hay 2 libros listos para sortear"}
+                  </div>
+                  <div className="text-sm text-muted" style={{marginBottom:20}}>Sortead cuál leéis primero — los demás se leerán después, por turnos</div>
+                </>
+              )}
+              <button className="btn btn-primary" onClick={handleSpin} disabled={spinning}>
+                {spinning ? <span className="spinner"/> : "🎲 Sortear libro"}
+              </button>
+            </div>
+          )}
+
+          {!canDraw && drawPool.length === 1 && (
+            <div className="empty-state" style={{padding:30}}>
+              <div className="empty-desc">Falta al menos 1 propuesta más para poder sortear</div>
+            </div>
+          )}
+        </>
+      )}
+
+      {pastBooks.length > 0 && (
+        <>
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>Leídos anteriormente</h2>
+          <div className="grid-3">
+            {pastBooks.map(b => {
+              const bookRatings = ratings.filter(r => r.bookHistoryId === b.id);
+              const avg = bookRatings.length ? (bookRatings.reduce((s,r)=>s+r.rating,0)/bookRatings.length).toFixed(1) : null;
+              const iRated = bookRatings.some(r => r.userId === user.uid);
+              return (
+                <div key={b.id} className="card card-sm card-clickable" onClick={()=>{setShowHistoryBook(b); setFinishForm({rating:0,comment:""});}}>
+                  <div className="font-medium" style={{fontSize:14}}>{b.title}</div>
+                  {b.author && <div className="text-xs text-muted">{b.author}</div>}
+                  <div className="text-xs text-muted mt-1">{b.totalPages} páginas · {formatDate(b.startedAt)} → {formatDate(b.finishedAt)}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
+                    {avg ? <span className="tag" style={{color:"var(--yellow)"}}>★ {avg} ({bookRatings.length}/3)</span> : <span className="tag">Sin puntuar</span>}
+                    {!iRated && <span className="tag tag-accent">Falta tu valoración</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {showPropose && (
+        <Modal title={myProposal ? "Editar mi propuesta" : "Proponer un libro"} onClose={()=>setShowPropose(false)}>
+          <div className="form-group">
+            <label className="form-label">Título</label>
+            <input className="form-input" placeholder="Ej: Cien años de soledad" value={proposalForm.title} onChange={e=>setProposalForm(f=>({...f,title:e.target.value}))} autoFocus />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Autor (opcional)</label>
+            <input className="form-input" placeholder="Ej: Gabriel García Márquez" value={proposalForm.author} onChange={e=>setProposalForm(f=>({...f,author:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Número de páginas</label>
+            <input className="form-input" type="number" min="1" placeholder="Ej: 320" value={proposalForm.pages} onChange={e=>setProposalForm(f=>({...f,pages:e.target.value}))} />
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setShowPropose(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handlePropose}>{myProposal?"Guardar cambios":"Proponer"}</button>
+          </div>
+        </Modal>
+      )}
+
+      {showSetup && spinResult && (
+        <Modal title="Organizar la lectura" onClose={()=>setShowSetup(false)}>
+          <div className="card card-sm" style={{marginBottom:18,background:"var(--bg3)"}}>
+            <div className="font-medium">{spinResult.title}</div>
+            <div className="text-xs text-muted mt-1">{spinResult.pages} páginas</div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">¿En cuántos días lo leéis?</label>
+            <input className="form-input" type="number" min="1" value={setupForm.days} onChange={e=>setSetupForm(f=>({...f,days:e.target.value}))} />
+            <div className="text-xs text-muted mt-2">Se generarán plazos automáticos repartiendo las páginas. Podréis ajustarlos luego.</div>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setShowSetup(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleConfirmSetup}>Empezar a leer</button>
+          </div>
+        </Modal>
+      )}
+
+      {showFinish && (
+        <Modal title={`Terminar "${current?.title}"`} onClose={()=>setShowFinish(false)}>
+          <div className="text-sm text-muted" style={{marginBottom:16}}>Pon tu puntuación y comentario. Joan y Chris podrán añadir el suyo después desde el historial.</div>
+          <div className="form-group">
+            <label className="form-label">Tu puntuación</label>
+            <StarPicker value={finishForm.rating} onChange={r=>setFinishForm(f=>({...f,rating:r}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Tu comentario (opcional)</label>
+            <textarea className="form-input" placeholder="¿Qué te ha parecido?" value={finishForm.comment} onChange={e=>setFinishForm(f=>({...f,comment:e.target.value}))} />
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setShowFinish(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleFinishBook}>Terminar libro</button>
+          </div>
+        </Modal>
+      )}
+
+      {showHistoryBook && (
+        <Modal title={showHistoryBook.title} onClose={()=>setShowHistoryBook(null)}>
+          <div className="text-xs text-muted" style={{marginBottom:16}}>
+            {showHistoryBook.author && <>{showHistoryBook.author} · </>}{showHistoryBook.totalPages} páginas · {formatDate(showHistoryBook.startedAt)} → {formatDate(showHistoryBook.finishedAt)}
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
+            {ratings.filter(r=>r.bookHistoryId===showHistoryBook.id).map(r => (
+              <div key={r.id} className="card card-sm">
+                <div className="flex justify-between items-center">
+                  <span className="font-medium" style={{fontSize:13}}>{r.userName}</span>
+                  <span style={{color:"var(--yellow)"}}>{"★".repeat(r.rating)}{"☆".repeat(5-r.rating)}</span>
+                </div>
+                {r.comment && <div className="text-sm text-muted mt-1">{r.comment}</div>}
+              </div>
+            ))}
+            {ratings.filter(r=>r.bookHistoryId===showHistoryBook.id).length === 0 && (
+              <div className="text-sm text-muted">Nadie ha puntuado este libro todavía</div>
+            )}
+          </div>
+
+          {!ratings.some(r=>r.bookHistoryId===showHistoryBook.id && r.userId===user.uid) ? (
+            <>
+              <div className="form-group">
+                <label className="form-label">Tu puntuación</label>
+                <StarPicker value={finishForm.rating} onChange={r=>setFinishForm(f=>({...f,rating:r}))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Tu comentario (opcional)</label>
+                <textarea className="form-input" placeholder="¿Qué te ha parecido?" value={finishForm.comment} onChange={e=>setFinishForm(f=>({...f,comment:e.target.value}))} />
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-ghost" onClick={()=>setShowHistoryBook(null)}>Cerrar</button>
+                <button className="btn btn-primary" onClick={()=>handleRateExisting(showHistoryBook.id, showHistoryBook.title)}>Guardar mi puntuación</button>
+              </div>
+            </>
+          ) : (
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={()=>setShowHistoryBook(null)}>Cerrar</button>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+};
+
 const NAV_ITEMS = [
   { id:"search", icon:"🔍", label:"Buscar" },
   { id:"rooms",  icon:"🏠", label:"Estancias" },
+  { id:"calendar", icon:"📅", label:"Calendario" },
+  { id:"bookclub", icon:"📚", label:"Club lectura" },
   { id:"expenses",icon:"💸", label:"Gastos" },
   { id:"history", icon:"📋", label:"Historial" },
 ];
 
-const Sidebar = ({ user, page, onNavigate, onOpenProfile }) => {
+const Sidebar = ({ user, page, onNavigate }) => {
   const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   return (
@@ -1419,37 +1744,61 @@ const Sidebar = ({ user, page, onNavigate, onOpenProfile }) => {
           </button>
         ))}
       </div>
-      <div className="sidebar-user" style={{cursor:"pointer"}} onClick={onOpenProfile} title="Mi perfil">
+      <div className="sidebar-user">
         <div className="user-avatar" style={{background:color}}>{initial}</div>
         <div className="user-info">
           <div className="user-name">{user.displayName||user.email}</div>
-          <div className="user-role">Ver perfil</div>
+          <div className="user-role">Miembro del hogar</div>
         </div>
-        <button className="logout-btn" onClick={e=>{e.stopPropagation();onOpenProfile();}} title="Mi perfil">👤</button>
+        <button className="logout-btn" onClick={()=>signOut(auth)} title="Cerrar sesión">⎋</button>
       </div>
     </div>
   );
 };
 
 // ─── Bottom Nav (mobile) ──────────────────────────────────────────────────────
-const BottomNav = ({ user, page, onNavigate, onOpenProfile }) => {
+const BOTTOM_NAV_PRIMARY = ["search","rooms","calendar","expenses"];
+
+const BottomNav = ({ user, page, onNavigate }) => {
+  const [showMore, setShowMore] = useState(false);
   const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
+  const primaryItems = NAV_ITEMS.filter(i => BOTTOM_NAV_PRIMARY.includes(i.id));
+  const moreItems = NAV_ITEMS.filter(i => !BOTTOM_NAV_PRIMARY.includes(i.id));
+  const moreActive = moreItems.some(i => i.id === page);
+
   return (
-    <nav className="bottom-nav">
-      <div className="bottom-nav-items">
-        {NAV_ITEMS.map(item => (
-          <button key={item.id} className={`bottom-nav-item ${page===item.id?"active":""}`} onClick={()=>onNavigate(item.id)}>
-            <span className="nav-icon">{item.icon}</span>
-            {item.label}
+    <>
+      <nav className="bottom-nav">
+        <div className="bottom-nav-items">
+          {primaryItems.map(item => (
+            <button key={item.id} className={`bottom-nav-item ${page===item.id?"active":""}`} onClick={()=>onNavigate(item.id)}>
+              <span className="nav-icon">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+          <button className={`bottom-nav-item ${moreActive?"active":""}`} onClick={()=>setShowMore(true)}>
+            <span className="nav-icon">⋯</span>
+            Más
           </button>
-        ))}
-        <button className="bottom-nav-item" onClick={onOpenProfile}>
-          <div className="nav-icon" style={{width:22,height:22,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:"#fff"}}>{initial}</div>
-          Perfil
-        </button>
-      </div>
-    </nav>
+        </div>
+      </nav>
+      {showMore && (
+        <Modal title="Más opciones" onClose={()=>setShowMore(false)}>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {moreItems.map(item => (
+              <button key={item.id} className={`nav-item ${page===item.id?"active":""}`} style={{borderRadius:10,padding:"12px 14px"}} onClick={()=>{onNavigate(item.id);setShowMore(false);}}>
+                <span className="icon" style={{fontSize:18}}>{item.icon}</span>{item.label}
+              </button>
+            ))}
+            <button className="nav-item" style={{borderRadius:10,padding:"12px 14px",marginTop:8,borderTop:"1px solid var(--border)",paddingTop:16}} onClick={()=>signOut(auth)}>
+              <div className="icon" style={{width:20,height:20,borderRadius:"50%",background:color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,color:"#fff"}}>{initial}</div>
+              Cerrar sesión
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 };
 
@@ -1458,7 +1807,6 @@ const AuthedApp = ({ user }) => {
   const { toasts, show: toast } = useToast();
   const [page, setPage] = useState("search");
   const [navState, setNavState] = useState({});
-  const [showProfile, setShowProfile] = useState(false);
 
   const navigate = (p, room, furniture) => {
     setPage(p);
@@ -1470,11 +1818,13 @@ const AuthedApp = ({ user }) => {
 
   const renderPage = () => {
     switch(page) {
-      case "search":    return <SearchPage user={user} onToast={toast} onNavigate={navigate}/>;
+      case "search":    return <SearchPage onNavigate={navigate}/>;
       case "rooms":     return <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "furniture": return navState.room ? <FurniturePage user={user} room={navState.room} onToast={toast} onNavigate={navigate}/> : <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "items":     return (navState.room&&navState.furniture) ? <ItemsPage user={user} room={navState.room} furniture={navState.furniture} onToast={toast} onNavigate={navigate}/> : <RoomsPage user={user} onToast={toast} onNavigate={navigate}/>;
       case "expenses":  return <ExpensesPage user={user} onToast={toast}/>;
+      case "calendar":  return <CalendarPage user={user} onToast={toast}/>;
+      case "bookclub":  return <BookClubPage user={user} onToast={toast}/>;
       case "history":   return <HistoryPage/>;
       default:          return <SearchPage onNavigate={navigate}/>;
     }
@@ -1482,11 +1832,10 @@ const AuthedApp = ({ user }) => {
 
   return (
     <div className="app-shell">
-      <Sidebar user={user} page={activePage} onNavigate={navigate} onOpenProfile={()=>setShowProfile(true)}/>
+      <Sidebar user={user} page={activePage} onNavigate={navigate}/>
       <main className="main-content">{renderPage()}</main>
-      <BottomNav user={user} page={activePage} onNavigate={navigate} onOpenProfile={()=>setShowProfile(true)}/>
+      <BottomNav user={user} page={activePage} onNavigate={navigate}/>
       <ToastContainer toasts={toasts}/>
-      {showProfile && <ProfileModal user={user} onClose={()=>setShowProfile(false)} onToast={toast}/>}
     </div>
   );
 };
