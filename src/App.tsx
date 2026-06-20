@@ -343,28 +343,31 @@ const isoDate = (d) => {
 };
 const isSameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
 
-// Distribute totalPages across N milestones between startDate and endDate (inclusive), roughly every ~3 days
-const generateMilestones = (totalPages, startDate, endDate) => {
+// Distribute totalUnits (pages or chapters) across N milestones between startDate and endDate (inclusive), roughly every ~3 days
+const generateMilestones = (totalUnits, startDate, endDate, unit) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   const totalDays = Math.max(1, Math.round((end - start) / (1000*60*60*24)));
   const intervalDays = totalDays <= 7 ? 1 : totalDays <= 21 ? 2 : 3;
   const numMilestones = Math.max(1, Math.floor(totalDays / intervalDays));
+  const unitLabel = unit === "chapters" ? "el capítulo" : "la página";
   const milestones = [];
   for (let i = 1; i <= numMilestones; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + Math.round((totalDays * i) / numMilestones));
-    const pageGoal = Math.round((totalPages * i) / numMilestones);
+    const goal = Math.round((totalUnits * i) / numMilestones);
     milestones.push({
       date: isoDate(d > end ? end : d),
-      pageGoal: Math.min(pageGoal, totalPages),
-      label: `Hasta la página ${Math.min(pageGoal, totalPages)}`,
+      goal: Math.min(goal, totalUnits),
+      label: `Hasta ${unitLabel} ${Math.min(goal, totalUnits)}`,
       done: false,
+      doneBy: null,
+      doneByName: null,
     });
   }
-  // Ensure last milestone matches end date and totalPages exactly
+  // Ensure last milestone matches end date and totalUnits exactly
   milestones[milestones.length-1].date = isoDate(end);
-  milestones[milestones.length-1].pageGoal = totalPages;
+  milestones[milestones.length-1].goal = totalUnits;
   return milestones;
 };
 
@@ -1310,17 +1313,21 @@ const BookClubPage = ({ user, onToast }) => {
   const [current, setCurrent] = useState(null);
   const [pastBooks, setPastBooks] = useState([]);
   const [ratings, setRatings] = useState([]); // all ratings, filtered per book in UI
+  const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showPropose, setShowPropose] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showFinish, setShowFinish] = useState(false);
   const [showHistoryBook, setShowHistoryBook] = useState(null);
+  const [editMilestoneIdx, setEditMilestoneIdx] = useState(null);
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState(null);
   const [spinPool, setSpinPool] = useState([]);
-  const [proposalForm, setProposalForm] = useState({ title:"", author:"", pages:"" });
+  const [proposalForm, setProposalForm] = useState({ title:"", author:"", units:"", unit:"pages" });
   const [setupForm, setSetupForm] = useState({ days:"21" });
   const [finishForm, setFinishForm] = useState({ rating:0, comment:"" });
+  const [editMilestoneForm, setEditMilestoneForm] = useState({ date:"", goal:"" });
+  const [noteText, setNoteText] = useState("");
 
   useEffect(() => {
     const unsub1 = onSnapshot(query(collection(db,"bookclubProposals"), orderBy("createdAt","asc")), snap => {
@@ -1336,30 +1343,46 @@ const BookClubPage = ({ user, onToast }) => {
     const unsub4 = onSnapshot(collection(db,"bookclubRatings"), snap => {
       setRatings(snap.docs.map(d=>({id:d.id,...d.data()})));
     });
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
+    const unsub5 = onSnapshot(query(collection(db,"bookclubNotes"), orderBy("createdAt","asc")), snap => {
+      setNotes(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, []);
 
   const pendingProposals = proposals.filter(p => p.status === "pending"); // lost a previous draw, waiting their turn
   const myProposal = proposals.find(p => p.proposedBy === user.uid);
   const isReading = !!(current && current.title);
+  const currentNotes = notes.filter(n => n.bookKey === (current?.chosenAtKey || ""));
 
   // Pool to draw from: if there's a current book being read, you can't draw again.
-  // Drawing happens from whichever proposals exist (2 or 3), combining fresh + pending.
-  const drawPool = proposals; // both pending and freshly proposed are eligible once it's draw time
+  const drawPool = proposals;
   const canDraw = !isReading && drawPool.length >= 2;
 
+  // Reader badges: how many books each person has seen finished by the group (everyone counts equally)
+  const readerCounts = pastBooks.reduce((acc, b) => {
+    // every group member gets credit for every finished book — count unique proposers seen via ratings instead would under-count,
+    // so we credit based on who actually rated it (participated) — fallback to proposer if nobody rated yet
+    const raters = ratings.filter(r => r.bookHistoryId === b.id);
+    const names = raters.length ? raters.map(r=>r.userName) : [b.proposedByName].filter(Boolean);
+    names.forEach(n => { acc[n] = (acc[n]||0) + 1; });
+    return acc;
+  }, {});
+
+  const unitLabel = (u) => u === "chapters" ? "capítulos" : "páginas";
+  const unitLabelSingular = (u) => u === "chapters" ? "capítulo" : "página";
+
   const handlePropose = async () => {
-    if (!proposalForm.title.trim() || !proposalForm.pages) return onToast("Pon título y número de páginas","error");
+    if (!proposalForm.title.trim() || !proposalForm.units) return onToast(`Pon título y número de ${unitLabel(proposalForm.unit)}`,"error");
     if (myProposal && myProposal.status !== "pending") {
-      await updateDoc(doc(db,"bookclubProposals",myProposal.id), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), pages:Number(proposalForm.pages) });
+      await updateDoc(doc(db,"bookclubProposals",myProposal.id), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), units:Number(proposalForm.units), unit:proposalForm.unit });
       onToast("Propuesta actualizada");
     } else if (!myProposal) {
-      await addDoc(collection(db,"bookclubProposals"), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), pages:Number(proposalForm.pages), proposedBy:user.uid, proposedByName:user.displayName, status:"proposed", createdAt:serverTimestamp() });
+      await addDoc(collection(db,"bookclubProposals"), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), units:Number(proposalForm.units), unit:proposalForm.unit, proposedBy:user.uid, proposedByName:user.displayName, status:"proposed", createdAt:serverTimestamp() });
       onToast("Libro propuesto");
     } else {
       return onToast("Tu libro ya está en espera de turno, no se puede editar ahora","error");
     }
-    setShowPropose(false); setProposalForm({ title:"", author:"", pages:"" });
+    setShowPropose(false); setProposalForm({ title:"", author:"", units:"", unit:"pages" });
   };
 
   const handleRemoveProposal = async (p) => {
@@ -1393,13 +1416,15 @@ const BookClubPage = ({ user, onToast }) => {
     if (!days || days < 1) return onToast("Pon un número de días válido","error");
     const start = new Date();
     const end = new Date(); end.setDate(start.getDate() + days);
-    const milestones = generateMilestones(spinResult.pages, start, end);
+    const unit = spinResult.unit || "pages";
+    const milestones = generateMilestones(spinResult.units, start, end, unit);
+    const bookKey = `${spinResult.id}-${Date.now()}`;
 
     await setDoc(doc(db,"bookclub","current"), {
-      title: spinResult.title, author: spinResult.author, totalPages: spinResult.pages,
+      title: spinResult.title, author: spinResult.author, totalUnits: spinResult.units, unit,
       proposedByName: spinResult.proposedByName,
       startDate: isoDate(start), endDate: isoDate(end),
-      milestones, chosenAt: serverTimestamp(),
+      milestones, chosenAt: serverTimestamp(), chosenAtKey: bookKey,
       roundBooks: spinPool.map(p=>({title:p.title, proposedByName:p.proposedByName})),
     });
 
@@ -1418,8 +1443,38 @@ const BookClubPage = ({ user, onToast }) => {
 
   const toggleMilestone = async (idx) => {
     const updated = [...current.milestones];
-    updated[idx] = { ...updated[idx], done: !updated[idx].done };
+    const wasDone = updated[idx].done;
+    updated[idx] = { ...updated[idx], done: !wasDone, doneBy: !wasDone ? user.uid : null, doneByName: !wasDone ? user.displayName : null };
     await updateDoc(doc(db,"bookclub","current"), { milestones: updated });
+  };
+
+  const openEditMilestone = (idx) => {
+    setEditMilestoneForm({ date: current.milestones[idx].date, goal: String(current.milestones[idx].goal) });
+    setEditMilestoneIdx(idx);
+  };
+
+  const handleSaveMilestone = async () => {
+    if (!editMilestoneForm.date || !editMilestoneForm.goal) return onToast("Rellena fecha y objetivo","error");
+    const updated = [...current.milestones];
+    updated[editMilestoneIdx] = {
+      ...updated[editMilestoneIdx],
+      date: editMilestoneForm.date,
+      goal: Number(editMilestoneForm.goal),
+      label: `Hasta ${current.unit === "chapters" ? "el capítulo" : "la página"} ${editMilestoneForm.goal}`,
+    };
+    await updateDoc(doc(db,"bookclub","current"), { milestones: updated });
+    onToast("Hito actualizado");
+    setEditMilestoneIdx(null);
+  };
+
+  const handleAddNote = async () => {
+    if (!noteText.trim()) return;
+    await addDoc(collection(db,"bookclubNotes"), {
+      bookKey: current.chosenAtKey, bookTitle: current.title,
+      userId: user.uid, userName: user.displayName,
+      text: noteText.trim(), createdAt: serverTimestamp(),
+    });
+    setNoteText("");
   };
 
   const handleFinishBook = async () => {
@@ -1456,6 +1511,8 @@ const BookClubPage = ({ user, onToast }) => {
   const doneCount = current?.milestones?.filter(m=>m.done).length || 0;
   const totalMilestones = current?.milestones?.length || 0;
   const progressPct = totalMilestones ? Math.round((doneCount/totalMilestones)*100) : 0;
+  const nextMilestone = current?.milestones?.find(m => !m.done);
+  const daysToNext = nextMilestone ? Math.ceil((new Date(nextMilestone.date) - new Date(isoDate(new Date()))) / (1000*60*60*24)) : null;
 
   const StarPicker = ({ value, onChange }) => (
     <div style={{display:"flex",gap:4}}>
@@ -1472,6 +1529,20 @@ const BookClubPage = ({ user, onToast }) => {
         <p className="page-subtitle">Proponed libros, sorteamos y leemos los 3, por turnos</p>
       </div>
 
+      {Object.keys(readerCounts).length > 0 && (
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:28}}>
+          {Object.entries(readerCounts).sort((a,b)=>b[1]-a[1]).map(([name, count]) => (
+            <div key={name} className="card card-sm" style={{display:"flex",alignItems:"center",gap:10,padding:"10px 16px"}}>
+              <span style={{fontSize:18}}>🏅</span>
+              <div>
+                <div className="font-medium" style={{fontSize:13}}>{name}</div>
+                <div className="text-xs text-muted">{count} libro{count!==1?"s":""} leído{count!==1?"s":""}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {isReading ? (
         <>
           <div className="card" style={{marginBottom:24}}>
@@ -1481,7 +1552,7 @@ const BookClubPage = ({ user, onToast }) => {
                 <div className="text-xs text-muted" style={{textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Leyendo ahora · propuesto por {current.proposedByName}</div>
                 <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:500}}>{current.title}</div>
                 {current.author && <div className="text-sm text-muted mt-1">{current.author}</div>}
-                <div className="text-xs text-muted mt-2">{current.totalPages} páginas · hasta {formatDate(current.endDate)}</div>
+                <div className="text-xs text-muted mt-2">{current.totalUnits} {unitLabel(current.unit)} · hasta {formatDate(current.endDate)}</div>
                 <div style={{marginTop:14}}>
                   <div className="flex justify-between" style={{marginBottom:6}}>
                     <span className="text-xs text-muted">{doneCount}/{totalMilestones} hitos completados</span>
@@ -1489,6 +1560,14 @@ const BookClubPage = ({ user, onToast }) => {
                   </div>
                   <div className="progress-track"><div className="progress-fill" style={{width:`${progressPct}%`}} /></div>
                 </div>
+                {nextMilestone && (
+                  <div className="callout-next-milestone" style={{marginTop:14,background:"var(--accent-bg)",border:"1px solid rgba(232,113,90,0.3)",borderRadius:10,padding:"10px 14px"}}>
+                    <span className="text-xs" style={{color:"var(--accent)",fontWeight:600}}>📍 Próximo hito: {nextMilestone.label}</span>
+                    <div className="text-xs text-muted mt-1">
+                      {formatDate(nextMilestone.date)} · {daysToNext > 0 ? `quedan ${daysToNext} día${daysToNext!==1?"s":""}` : daysToNext===0 ? "es hoy" : "atrasado"}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <button className="btn btn-ghost btn-sm" style={{marginTop:16}} onClick={()=>setShowFinish(true)}>✓ Marcar como terminado</button>
@@ -1505,11 +1584,38 @@ const BookClubPage = ({ user, onToast }) => {
                   </div>
                   <div className="milestone-info">
                     <div className={`milestone-label ${m.done?"done-text":""}`}>{m.label}</div>
-                    <div className="milestone-date">{formatDate(m.date)} {overdue ? "· atrasado" : ""}</div>
+                    <div className="milestone-date">
+                      {formatDate(m.date)} {overdue ? "· atrasado" : ""}
+                      {m.done && m.doneByName && <> · marcado por {m.doneByName}</>}
+                    </div>
                   </div>
+                  <button className="btn-icon" style={{fontSize:12,padding:"5px 9px"}} onClick={()=>openEditMilestone(idx)} title="Editar hito">✎</button>
                 </div>
               );
             })}
+          </div>
+
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>Notas de lectura</h2>
+          <div className="card">
+            <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:currentNotes.length?16:0,maxHeight:320,overflowY:"auto"}}>
+              {currentNotes.length === 0 && <div className="text-sm text-muted">Sin notas todavía — comparte por dónde vas o qué te ha parecido</div>}
+              {currentNotes.map(n => (
+                <div key={n.id} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <div className="user-avatar" style={{width:28,height:28,fontSize:11,flexShrink:0,background:USER_COLORS[n.userName.charCodeAt(0)%USER_COLORS.length]}}>{n.userName[0].toUpperCase()}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+                      <span className="font-medium" style={{fontSize:12.5}}>{n.userName}</span>
+                      <span className="text-xs text-muted">{formatDate(n.createdAt)}</span>
+                    </div>
+                    <div className="text-sm" style={{color:"var(--text)",marginTop:2}}>{n.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <input className="form-input" placeholder="Escribe una nota..." value={noteText} onChange={e=>setNoteText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleAddNote()} />
+              <button className="btn btn-primary btn-sm" onClick={handleAddNote}>Enviar</button>
+            </div>
           </div>
 
           {pendingProposals.length > 0 && (
@@ -1520,7 +1626,7 @@ const BookClubPage = ({ user, onToast }) => {
                   <div key={p.id} className="card card-sm">
                     <div className="font-medium" style={{fontSize:14}}>{p.title}</div>
                     {p.author && <div className="text-xs text-muted">{p.author}</div>}
-                    <div className="text-xs text-muted mt-1">{p.pages} páginas · propuesto por {p.proposedByName}</div>
+                    <div className="text-xs text-muted mt-1">{p.units} {unitLabel(p.unit)} · propuesto por {p.proposedByName}</div>
                   </div>
                 ))}
               </div>
@@ -1541,7 +1647,7 @@ const BookClubPage = ({ user, onToast }) => {
                       <div style={{flex:1,minWidth:0}}>
                         <div className="font-medium" style={{fontSize:14}}>{p.title}</div>
                         {p.author && <div className="text-xs text-muted">{p.author}</div>}
-                        <div className="text-xs text-muted">{p.pages} páginas · {p.proposedByName}</div>
+                        <div className="text-xs text-muted">{p.units} {unitLabel(p.unit)} · {p.proposedByName}</div>
                         {p.status === "pending" && <span className="tag tag-blue" style={{marginTop:4}}>En espera de turno</span>}
                       </div>
                       {isMine && p.status !== "pending" && <button className="btn-icon" style={{fontSize:11,padding:"4px 8px"}} onClick={()=>handleRemoveProposal(p)}>✕</button>}
@@ -1558,7 +1664,7 @@ const BookClubPage = ({ user, onToast }) => {
             {!myProposal ? (
               <button className="btn btn-primary" onClick={()=>setShowPropose(true)}>+ Proponer mi libro</button>
             ) : myProposal.status !== "pending" ? (
-              <button className="btn btn-ghost" onClick={()=>{setProposalForm({title:myProposal.title,author:myProposal.author||"",pages:String(myProposal.pages)});setShowPropose(true);}}>Editar mi propuesta</button>
+              <button className="btn btn-ghost" onClick={()=>{setProposalForm({title:myProposal.title,author:myProposal.author||"",units:String(myProposal.units),unit:myProposal.unit||"pages"});setShowPropose(true);}}>Editar mi propuesta</button>
             ) : null}
           </div>
 
@@ -1606,7 +1712,7 @@ const BookClubPage = ({ user, onToast }) => {
                 <div key={b.id} className="card card-sm card-clickable" onClick={()=>{setShowHistoryBook(b); setFinishForm({rating:0,comment:""});}}>
                   <div className="font-medium" style={{fontSize:14}}>{b.title}</div>
                   {b.author && <div className="text-xs text-muted">{b.author}</div>}
-                  <div className="text-xs text-muted mt-1">{b.totalPages} páginas · {formatDate(b.startedAt)} → {formatDate(b.finishedAt)}</div>
+                  <div className="text-xs text-muted mt-1">{b.totalUnits} {unitLabel(b.unit)} · {formatDate(b.startedAt)} → {formatDate(b.finishedAt)}</div>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
                     {avg ? <span className="tag" style={{color:"var(--yellow)"}}>★ {avg} ({bookRatings.length}/3)</span> : <span className="tag">Sin puntuar</span>}
                     {!iRated && <span className="tag tag-accent">Falta tu valoración</span>}
@@ -1629,8 +1735,15 @@ const BookClubPage = ({ user, onToast }) => {
             <input className="form-input" placeholder="Ej: Gabriel García Márquez" value={proposalForm.author} onChange={e=>setProposalForm(f=>({...f,author:e.target.value}))} />
           </div>
           <div className="form-group">
-            <label className="form-label">Número de páginas</label>
-            <input className="form-input" type="number" min="1" placeholder="Ej: 320" value={proposalForm.pages} onChange={e=>setProposalForm(f=>({...f,pages:e.target.value}))} />
+            <label className="form-label">Medir el progreso por</label>
+            <div style={{display:"flex",gap:8}}>
+              <div onClick={()=>setProposalForm(f=>({...f,unit:"pages"}))} style={{flex:1,textAlign:"center",padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:13,background:proposalForm.unit==="pages"?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${proposalForm.unit==="pages"?"var(--accent)":"var(--border)"}`,color:proposalForm.unit==="pages"?"var(--accent)":"var(--text2)"}}>Páginas</div>
+              <div onClick={()=>setProposalForm(f=>({...f,unit:"chapters"}))} style={{flex:1,textAlign:"center",padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:13,background:proposalForm.unit==="chapters"?"var(--accent-bg)":"var(--bg3)",border:`1px solid ${proposalForm.unit==="chapters"?"var(--accent)":"var(--border)"}`,color:proposalForm.unit==="chapters"?"var(--accent)":"var(--text2)"}}>Capítulos</div>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Número de {unitLabel(proposalForm.unit)}</label>
+            <input className="form-input" type="number" min="1" placeholder={proposalForm.unit==="chapters"?"Ej: 24":"Ej: 320"} value={proposalForm.units} onChange={e=>setProposalForm(f=>({...f,units:e.target.value}))} />
           </div>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowPropose(false)}>Cancelar</button>
@@ -1643,16 +1756,33 @@ const BookClubPage = ({ user, onToast }) => {
         <Modal title="Organizar la lectura" onClose={()=>setShowSetup(false)}>
           <div className="card card-sm" style={{marginBottom:18,background:"var(--bg3)"}}>
             <div className="font-medium">{spinResult.title}</div>
-            <div className="text-xs text-muted mt-1">{spinResult.pages} páginas</div>
+            <div className="text-xs text-muted mt-1">{spinResult.units} {unitLabel(spinResult.unit)}</div>
           </div>
           <div className="form-group">
             <label className="form-label">¿En cuántos días lo leéis?</label>
             <input className="form-input" type="number" min="1" value={setupForm.days} onChange={e=>setSetupForm(f=>({...f,days:e.target.value}))} />
-            <div className="text-xs text-muted mt-2">Se generarán plazos automáticos repartiendo las páginas. Podréis ajustarlos luego.</div>
+            <div className="text-xs text-muted mt-2">Se generarán plazos automáticos repartiendo los {unitLabel(spinResult.unit)}. Podréis ajustar cada hito a mano luego.</div>
           </div>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowSetup(false)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleConfirmSetup}>Empezar a leer</button>
+          </div>
+        </Modal>
+      )}
+
+      {editMilestoneIdx !== null && (
+        <Modal title="Editar hito" onClose={()=>setEditMilestoneIdx(null)}>
+          <div className="form-group">
+            <label className="form-label">Fecha límite</label>
+            <input className="form-input" type="date" value={editMilestoneForm.date} onChange={e=>setEditMilestoneForm(f=>({...f,date:e.target.value}))} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Hasta {unitLabelSingular(current?.unit)} número</label>
+            <input className="form-input" type="number" min="1" value={editMilestoneForm.goal} onChange={e=>setEditMilestoneForm(f=>({...f,goal:e.target.value}))} />
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setEditMilestoneIdx(null)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleSaveMilestone}>Guardar</button>
           </div>
         </Modal>
       )}
@@ -1678,7 +1808,7 @@ const BookClubPage = ({ user, onToast }) => {
       {showHistoryBook && (
         <Modal title={showHistoryBook.title} onClose={()=>setShowHistoryBook(null)}>
           <div className="text-xs text-muted" style={{marginBottom:16}}>
-            {showHistoryBook.author && <>{showHistoryBook.author} · </>}{showHistoryBook.totalPages} páginas · {formatDate(showHistoryBook.startedAt)} → {formatDate(showHistoryBook.finishedAt)}
+            {showHistoryBook.author && <>{showHistoryBook.author} · </>}{showHistoryBook.totalUnits} {unitLabel(showHistoryBook.unit)} · {formatDate(showHistoryBook.startedAt)} → {formatDate(showHistoryBook.finishedAt)}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:20}}>
             {ratings.filter(r=>r.bookHistoryId===showHistoryBook.id).map(r => (
