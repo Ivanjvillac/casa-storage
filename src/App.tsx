@@ -1342,19 +1342,22 @@ const BookClubPage = ({ user, onToast }) => {
   const [proposals, setProposals] = useState([]); // status: proposed | pending
   const [current, setCurrent] = useState(null);
   const [pastBooks, setPastBooks] = useState([]);
-  const [ratings, setRatings] = useState([]); // all ratings, filtered per book in UI
+  const [ratings, setRatings] = useState([]);
   const [notes, setNotes] = useState([]);
+  const [progress, setProgress] = useState([]); // individual milestone checks per user
   const [loading, setLoading] = useState(true);
   const [showPropose, setShowPropose] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showFinish, setShowFinish] = useState(false);
   const [showHistoryBook, setShowHistoryBook] = useState(null);
+  const [showChangeUnit, setShowChangeUnit] = useState(false);
+  const [changeUnitForm, setChangeUnitForm] = useState({ unit:"chapters" });
   const [editMilestoneIdx, setEditMilestoneIdx] = useState(null);
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState(null);
   const [spinPool, setSpinPool] = useState([]);
   const [proposalForm, setProposalForm] = useState({ title:"", author:"", units:"", unit:"pages" });
-  const [setupForm, setSetupForm] = useState({ days:"21", unit:"" }); // unit "" means inherit from book
+  const [setupForm, setSetupForm] = useState({ days:"21", unit:"" });
   const [finishForm, setFinishForm] = useState({ rating:0, comment:"" });
   const [editMilestoneForm, setEditMilestoneForm] = useState({ date:"", goal:"" });
   const [noteText, setNoteText] = useState("");
@@ -1376,7 +1379,10 @@ const BookClubPage = ({ user, onToast }) => {
     const unsub5 = onSnapshot(query(collection(db,"bookclubNotes"), orderBy("createdAt","asc")), snap => {
       setNotes(snap.docs.map(d=>({id:d.id,...d.data()})));
     });
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+    const unsub6 = onSnapshot(collection(db,"bookclubProgress"), snap => {
+      setProgress(snap.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); };
   }, []);
 
   const pendingProposals = proposals.filter(p => p.status === "pending"); // lost a previous draw, waiting their turn
@@ -1472,10 +1478,32 @@ const BookClubPage = ({ user, onToast }) => {
   };
 
   const toggleMilestone = async (idx) => {
-    const updated = [...current.milestones];
-    const wasDone = updated[idx].done;
-    updated[idx] = { ...updated[idx], done: !wasDone, doneBy: !wasDone ? user.uid : null, doneByName: !wasDone ? user.displayName : null };
-    await updateDoc(doc(db,"bookclub","current"), { milestones: updated });
+    const bookKey = current.chosenAtKey || "";
+    const existing = progress.find(p => p.bookKey === bookKey && p.userId === user.uid && p.milestoneIdx === idx);
+    if (existing) {
+      // Unmark — remove the progress doc
+      await deleteDoc(doc(db,"bookclubProgress",existing.id));
+    } else {
+      // Mark — add a progress doc for this user + milestone
+      await addDoc(collection(db,"bookclubProgress"), {
+        bookKey, userId: user.uid, userName: user.displayName,
+        milestoneIdx: idx, markedAt: serverTimestamp(),
+      });
+    }
+  };
+
+  const handleChangeUnit = async () => {
+    const newUnit = changeUnitForm.unit;
+    const start = new Date(current.startDate);
+    const end = new Date(current.endDate);
+    const newMilestones = generateMilestones(current.totalUnits, start, end, newUnit);
+    await updateDoc(doc(db,"bookclub","current"), { unit: newUnit, milestones: newMilestones });
+    // Clear all individual progress for this book since milestones are regenerated
+    const bookKey = current.chosenAtKey || "";
+    const toDelete = progress.filter(p => p.bookKey === bookKey);
+    for (const p of toDelete) await deleteDoc(doc(db,"bookclubProgress",p.id));
+    onToast("Unidad cambiada y hitos regenerados");
+    setShowChangeUnit(false);
   };
 
   const openEditMilestone = (idx) => {
@@ -1538,10 +1566,13 @@ const BookClubPage = ({ user, onToast }) => {
 
   if (loading) return <div className="loading-page"><div className="spinner"/></div>;
 
-  const doneCount = current?.milestones?.filter(m=>m.done).length || 0;
+  const bookKey = current?.chosenAtKey || "";
+  const myProgress = progress.filter(p => p.bookKey === bookKey && p.userId === user.uid);
+  const myDoneIdxs = new Set(myProgress.map(p => p.milestoneIdx));
+  const doneCount = myDoneIdxs.size;
   const totalMilestones = current?.milestones?.length || 0;
   const progressPct = totalMilestones ? Math.round((doneCount/totalMilestones)*100) : 0;
-  const nextMilestone = current?.milestones?.find(m => !m.done);
+  const nextMilestone = current?.milestones?.find((_, idx) => !myDoneIdxs.has(idx));
   const daysToNext = nextMilestone ? Math.ceil((new Date(nextMilestone.date) - new Date(isoDate(new Date()))) / (1000*60*60*24)) : null;
 
   const StarPicker = ({ value, onChange }) => (
@@ -1582,17 +1613,22 @@ const BookClubPage = ({ user, onToast }) => {
                 <div className="text-xs text-muted" style={{textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Leyendo ahora · propuesto por {current.proposedByName}</div>
                 <div style={{fontFamily:"var(--font-display)",fontSize:24,fontWeight:500}}>{current.title}</div>
                 {current.author && <div className="text-sm text-muted mt-1">{current.author}</div>}
-                <div className="text-xs text-muted mt-2">{current.totalUnits} {unitLabel(current.unit)} · hasta {formatDate(current.endDate)}</div>
+                <div className="text-xs text-muted mt-2" style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span>{current.totalUnits} {unitLabel(current.unit)} · hasta {formatDate(current.endDate)}</span>
+                  <button className="btn btn-ghost btn-sm" style={{padding:"2px 8px",fontSize:11}} onClick={()=>{setChangeUnitForm({unit:current.unit==="pages"?"chapters":"pages"});setShowChangeUnit(true);}}>
+                    ⇄ Cambiar a {current.unit==="pages"?"capítulos":"páginas"}
+                  </button>
+                </div>
                 <div style={{marginTop:14}}>
                   <div className="flex justify-between" style={{marginBottom:6}}>
-                    <span className="text-xs text-muted">{doneCount}/{totalMilestones} hitos completados</span>
+                    <span className="text-xs text-muted">Tu progreso: {doneCount}/{totalMilestones} hitos</span>
                     <span className="text-xs font-medium" style={{color:"var(--accent)"}}>{progressPct}%</span>
                   </div>
                   <div className="progress-track"><div className="progress-fill" style={{width:`${progressPct}%`}} /></div>
                 </div>
                 {nextMilestone && (
-                  <div className="callout-next-milestone" style={{marginTop:14,background:"var(--accent-bg)",border:"1px solid rgba(232,113,90,0.3)",borderRadius:10,padding:"10px 14px"}}>
-                    <span className="text-xs" style={{color:"var(--accent)",fontWeight:600}}>📍 Próximo hito: {nextMilestone.label}</span>
+                  <div style={{marginTop:14,background:"var(--accent-bg)",border:"1px solid rgba(232,113,90,0.3)",borderRadius:10,padding:"10px 14px"}}>
+                    <span className="text-xs" style={{color:"var(--accent)",fontWeight:600}}>📍 Tu próximo hito: {nextMilestone.label}</span>
                     <div className="text-xs text-muted mt-1">
                       {formatDate(nextMilestone.date)} · {daysToNext > 0 ? `quedan ${daysToNext} día${daysToNext!==1?"s":""}` : daysToNext===0 ? "es hoy" : "atrasado"}
                     </div>
@@ -1606,18 +1642,28 @@ const BookClubPage = ({ user, onToast }) => {
           <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginBottom:12}}>Plazos de lectura</h2>
           <div className="card">
             {current.milestones.map((m, idx) => {
-              const overdue = !m.done && m.date < isoDate(new Date());
+              const iDone = myDoneIdxs.has(idx);
+              const whoMarked = progress.filter(p => p.bookKey === bookKey && p.milestoneIdx === idx);
+              const overdue = !iDone && m.date < isoDate(new Date());
               return (
                 <div key={idx} className="milestone-row">
-                  <div className={`milestone-check ${m.done?"done":""} ${overdue?"overdue":""}`} onClick={()=>toggleMilestone(idx)}>
-                    {m.done ? "✓" : ""}
+                  <div className={`milestone-check ${iDone?"done":""} ${overdue?"overdue":""}`} onClick={()=>toggleMilestone(idx)}>
+                    {iDone ? "✓" : ""}
                   </div>
                   <div className="milestone-info">
-                    <div className={`milestone-label ${m.done?"done-text":""}`}>{m.label}</div>
+                    <div className={`milestone-label ${iDone?"done-text":""}`}>{m.label}</div>
                     <div className="milestone-date">
                       {formatDate(m.date)} {overdue ? "· atrasado" : ""}
-                      {m.done && m.doneByName && <> · marcado por {m.doneByName}</>}
                     </div>
+                    {whoMarked.length > 0 && (
+                      <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                        {whoMarked.map(p => (
+                          <span key={p.id} style={{display:"inline-flex",alignItems:"center",gap:3,background:"var(--bg4)",borderRadius:12,padding:"2px 8px",fontSize:11,color:"var(--green)"}}>
+                            ✓ {p.userName}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <button className="btn-icon" style={{fontSize:12,padding:"5px 9px"}} onClick={()=>openEditMilestone(idx)} title="Editar hito">✎</button>
                 </div>
@@ -1831,6 +1877,32 @@ const BookClubPage = ({ user, onToast }) => {
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setEditMilestoneIdx(null)}>Cancelar</button>
             <button className="btn btn-primary" onClick={handleSaveMilestone}>Guardar</button>
+          </div>
+        </Modal>
+      )}
+
+      {showChangeUnit && (
+        <Modal title="Cambiar unidad de lectura" onClose={()=>setShowChangeUnit(false)}>
+          <div className="text-sm text-muted" style={{marginBottom:16}}>
+            Esto regenerará todos los hitos y borrará el progreso individual marcado hasta ahora. El número total de {unitLabel(current?.unit)} del libro no cambia.
+          </div>
+          <div className="form-group">
+            <label className="form-label">Dividir por</label>
+            <div style={{display:"flex",gap:8}}>
+              {[{v:"pages",l:"Páginas"},{v:"chapters",l:"Capítulos"}].map(({v,l}) => (
+                <div key={v} onClick={()=>setChangeUnitForm(f=>({...f,unit:v}))}
+                  style={{flex:1,textAlign:"center",padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:13,
+                    background:changeUnitForm.unit===v?"var(--accent-bg)":"var(--bg3)",
+                    border:`1px solid ${changeUnitForm.unit===v?"var(--accent)":"var(--border)"}`,
+                    color:changeUnitForm.unit===v?"var(--accent)":"var(--text2)"}}>
+                  {l}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-ghost" onClick={()=>setShowChangeUnit(false)}>Cancelar</button>
+            <button className="btn btn-primary" onClick={handleChangeUnit}>Cambiar y regenerar hitos</button>
           </div>
         </Modal>
       )}
