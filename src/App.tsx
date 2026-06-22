@@ -226,6 +226,7 @@ const styles = `
   .month-nav span { font-family: var(--font-display); font-size: 18px; font-weight: 500; min-width: 160px; text-align: center; }
   .summary-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
   .summary-row:last-child { border-bottom: none; }
+  h2, h3 { color: var(--text); }
   .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); padding: 8px 20px; margin-top: 8px; }
   .flex { display: flex; } .items-center { align-items: center; } .justify-between { justify-content: space-between; }
   .w-full { width: 100%; } .font-medium { font-weight: 500; }
@@ -1646,7 +1647,7 @@ const BookClubPage = ({ user, onToast }) => {
             <button className="btn btn-ghost btn-sm" style={{marginTop:16}} onClick={()=>setShowFinish(true)}>✓ Marcar como terminado</button>
           </div>
 
-          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginBottom:12}}>Plazos de lectura</h2>
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,color:"var(--text)",marginBottom:12}}>Plazos de lectura</h2>
           <div className="card">
             {current.milestones.map((m, idx) => {
               const iDone = myDoneIdxs.has(idx);
@@ -1678,7 +1679,7 @@ const BookClubPage = ({ user, onToast }) => {
             })}
           </div>
 
-          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>Notas de lectura</h2>
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,color:"var(--text)",marginTop:32,marginBottom:12}}>Notas de lectura</h2>
           <div className="card">
             <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:currentNotes.length?16:0,maxHeight:320,overflowY:"auto"}}>
               {currentNotes.length === 0 && <div className="text-sm text-muted">Sin notas todavía — comparte por dónde vas o qué te ha parecido</div>}
@@ -1703,7 +1704,7 @@ const BookClubPage = ({ user, onToast }) => {
 
           {pendingProposals.length > 0 && (
             <>
-              <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>En espera de turno</h2>
+              <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,color:"var(--text)",marginTop:32,marginBottom:12}}>En espera de turno</h2>
               <div className="grid-3">
                 {pendingProposals.map(p => (
                   <div key={p.id} className="card card-sm">
@@ -1785,7 +1786,7 @@ const BookClubPage = ({ user, onToast }) => {
 
       {pastBooks.length > 0 && (
         <>
-          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,marginTop:32,marginBottom:12}}>Leídos anteriormente</h2>
+          <h2 style={{fontFamily:"var(--font-display)",fontSize:18,fontWeight:500,color:"var(--text)",marginTop:32,marginBottom:12}}>Leídos anteriormente</h2>
           <div className="grid-3">
             {pastBooks.map(b => {
               const bookRatings = ratings.filter(r => r.bookHistoryId === b.id);
