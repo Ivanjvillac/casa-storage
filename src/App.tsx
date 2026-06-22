@@ -70,6 +70,11 @@ const colorForName = (name) => {
   if (!name) return null;
   return NAME_COLORS[name.toLowerCase().trim()] || null;
 };
+
+// Resolve avatar color: fixed name color > stored photoURL > fallback from array
+const avatarColor = (name, photoURL) => {
+  return colorForName(name) || (photoURL && USER_COLORS.includes(photoURL) ? photoURL : USER_COLORS[name ? name.charCodeAt(0) % USER_COLORS.length : 0]);
+};
 const EVENT_COLORS = [
   { id:"accent", color:"#e8715a", label:"Coral" },
   { id:"blue",   color:"#5a9fe8", label:"Azul" },
@@ -1679,7 +1684,7 @@ const BookClubPage = ({ user, onToast }) => {
               {currentNotes.length === 0 && <div className="text-sm text-muted">Sin notas todavía — comparte por dónde vas o qué te ha parecido</div>}
               {currentNotes.map(n => (
                 <div key={n.id} style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-                  <div className="user-avatar" style={{width:28,height:28,fontSize:11,flexShrink:0,background:USER_COLORS[n.userName.charCodeAt(0)%USER_COLORS.length]}}>{n.userName[0].toUpperCase()}</div>
+                  <div className="user-avatar" style={{width:28,height:28,fontSize:11,flexShrink:0,background:avatarColor(n.userName, null)}}>{n.userName[0].toUpperCase()}</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"baseline",gap:6}}>
                       <span className="font-medium" style={{fontSize:12.5}}>{n.userName}</span>
@@ -1721,7 +1726,7 @@ const BookClubPage = ({ user, onToast }) => {
                 <div key={i} className={`proposal-slot ${p?"filled":""}`}>
                   {p ? (
                     <>
-                      <div className="proposal-avatar" style={{background:USER_COLORS[i%USER_COLORS.length]}}>{p.proposedByName[0].toUpperCase()}</div>
+                      <div className="proposal-avatar" style={{background:avatarColor(p.proposedByName, null)}}>{p.proposedByName[0].toUpperCase()}</div>
                       <div style={{flex:1,minWidth:0}}>
                         <div className="font-medium" style={{fontSize:14}}>{p.title}</div>
                         {p.author && <div className="text-xs text-muted">{p.author}</div>}
@@ -1993,7 +1998,7 @@ const NAV_ITEMS = [
 ];
 
 const Sidebar = ({ user, page, onNavigate }) => {
-  const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
+  const color = avatarColor(user.displayName, user.photoURL);
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   return (
     <div className="sidebar">
@@ -2023,7 +2028,7 @@ const BOTTOM_NAV_PRIMARY = ["search","rooms","calendar","expenses"];
 
 const BottomNav = ({ user, page, onNavigate }) => {
   const [showMore, setShowMore] = useState(false);
-  const color = user.photoURL && USER_COLORS.includes(user.photoURL) ? user.photoURL : USER_COLORS[0];
+  const color = avatarColor(user.displayName, user.photoURL);
   const initial = (user.displayName||user.email||"?")[0].toUpperCase();
   const primaryItems = NAV_ITEMS.filter(i => BOTTOM_NAV_PRIMARY.includes(i.id));
   const moreItems = NAV_ITEMS.filter(i => !BOTTOM_NAV_PRIMARY.includes(i.id));
