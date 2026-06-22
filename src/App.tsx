@@ -1351,7 +1351,7 @@ const BookClubPage = ({ user, onToast }) => {
   const [showFinish, setShowFinish] = useState(false);
   const [showHistoryBook, setShowHistoryBook] = useState(null);
   const [showChangeUnit, setShowChangeUnit] = useState(false);
-  const [changeUnitForm, setChangeUnitForm] = useState({ unit:"chapters" });
+  const [changeUnitForm, setChangeUnitForm] = useState({ unit:"chapters", totalUnits:"" });
   const [editMilestoneIdx, setEditMilestoneIdx] = useState(null);
   const [spinning, setSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState(null);
@@ -1494,10 +1494,12 @@ const BookClubPage = ({ user, onToast }) => {
 
   const handleChangeUnit = async () => {
     const newUnit = changeUnitForm.unit;
+    const newTotal = Number(changeUnitForm.totalUnits);
+    if (!newTotal || newTotal < 1) return onToast(`Pon el número de ${unitLabel(newUnit)} del libro`, "error");
     const start = new Date(current.startDate);
     const end = new Date(current.endDate);
-    const newMilestones = generateMilestones(current.totalUnits, start, end, newUnit);
-    await updateDoc(doc(db,"bookclub","current"), { unit: newUnit, milestones: newMilestones });
+    const newMilestones = generateMilestones(newTotal, start, end, newUnit);
+    await updateDoc(doc(db,"bookclub","current"), { unit: newUnit, totalUnits: newTotal, milestones: newMilestones });
     // Clear all individual progress for this book since milestones are regenerated
     const bookKey = current.chosenAtKey || "";
     const toDelete = progress.filter(p => p.bookKey === bookKey);
@@ -1615,7 +1617,7 @@ const BookClubPage = ({ user, onToast }) => {
                 {current.author && <div className="text-sm text-muted mt-1">{current.author}</div>}
                 <div className="text-xs text-muted mt-2" style={{display:"flex",alignItems:"center",gap:8}}>
                   <span>{current.totalUnits} {unitLabel(current.unit)} · hasta {formatDate(current.endDate)}</span>
-                  <button className="btn btn-ghost btn-sm" style={{padding:"2px 8px",fontSize:11}} onClick={()=>{setChangeUnitForm({unit:current.unit==="pages"?"chapters":"pages"});setShowChangeUnit(true);}}>
+                  <button className="btn btn-ghost btn-sm" style={{padding:"2px 8px",fontSize:11}} onClick={()=>{setChangeUnitForm({unit:current.unit==="pages"?"chapters":"pages",totalUnits:""});setShowChangeUnit(true);}}>
                     ⇄ Cambiar a {current.unit==="pages"?"capítulos":"páginas"}
                   </button>
                 </div>
@@ -1884,7 +1886,7 @@ const BookClubPage = ({ user, onToast }) => {
       {showChangeUnit && (
         <Modal title="Cambiar unidad de lectura" onClose={()=>setShowChangeUnit(false)}>
           <div className="text-sm text-muted" style={{marginBottom:16}}>
-            Esto regenerará todos los hitos y borrará el progreso individual marcado hasta ahora. El número total de {unitLabel(current?.unit)} del libro no cambia.
+            Esto regenerará todos los hitos y borrará el progreso individual marcado hasta ahora.
           </div>
           <div className="form-group">
             <label className="form-label">Dividir por</label>
@@ -1898,6 +1900,16 @@ const BookClubPage = ({ user, onToast }) => {
                   {l}
                 </div>
               ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">¿Cuántos {unitLabel(changeUnitForm.unit)} tiene el libro?</label>
+            <input className="form-input" type="number" min="1"
+              placeholder={changeUnitForm.unit==="chapters"?"Ej: 34":"Ej: 368"}
+              value={changeUnitForm.totalUnits}
+              onChange={e=>setChangeUnitForm(f=>({...f,totalUnits:e.target.value}))} autoFocus />
+            <div className="text-xs text-muted mt-2">
+              Actualmente tiene {current?.totalUnits} {unitLabel(current?.unit)}.
             </div>
           </div>
           <div className="modal-footer">
