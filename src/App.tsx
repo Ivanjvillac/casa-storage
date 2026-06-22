@@ -57,6 +57,19 @@ const EXPENSE_CATEGORIES = [
 ];
 const ITEM_TAGS = ["Ropa","Herramientas","Documentos","Electrónica","Medicamentos","Limpieza","Cocina","Deportes","Libros","Juguetes","Varios"];
 const USER_COLORS = ["#e8715a","#5a9fe8","#5ae87a","#e8c95a","#c25ae8","#5ae8d4"];
+
+// Fixed colors by nickname (case-insensitive)
+const NAME_COLORS = {
+  "patito": "#e8c95a",      // amarillo
+  "brujito": "#5ae87a",     // verde
+  "princi-pito": "#5a9fe8", // azul
+  "princip-ito": "#5a9fe8", // typo variant
+  "principito": "#5a9fe8",  // without hyphen variant
+};
+const colorForName = (name) => {
+  if (!name) return null;
+  return NAME_COLORS[name.toLowerCase().trim()] || null;
+};
 const EVENT_COLORS = [
   { id:"accent", color:"#e8715a", label:"Coral" },
   { id:"blue",   color:"#5a9fe8", label:"Azul" },
@@ -480,6 +493,16 @@ const LoginPage = ({ onToast }) => {
   const [color, setColor] = useState(USER_COLORS[0]);
   const [loading, setLoading] = useState(false);
 
+  // Auto-assign color when a known name is typed
+  const handleNameChange = (e) => {
+    const val = e.target.value;
+    setName(val);
+    const fixed = colorForName(val);
+    if (fixed) setColor(fixed);
+  };
+
+  const fixedColor = colorForName(name); // truthy if name is known
+
   const handleLogin = async () => {
     if (!email || !password) return;
     setLoading(true);
@@ -513,7 +536,7 @@ const LoginPage = ({ onToast }) => {
         {tab === "register" && (
           <div className="form-group">
             <label className="form-label">Tu nombre</label>
-            <input className="form-input" placeholder="Ej: Ana" value={name} onChange={e=>setName(e.target.value)} />
+            <input className="form-input" placeholder="Ej: Patito, Brujito, Princi-pito" value={name} onChange={handleNameChange} />
           </div>
         )}
         <div className="form-group">
@@ -529,11 +552,18 @@ const LoginPage = ({ onToast }) => {
         {tab === "register" && (
           <div className="form-group">
             <label className="form-label">Tu color</label>
-            <div className="color-picker">
-              {USER_COLORS.map(c => (
-                <div key={c} className={`color-dot ${color===c?"selected":""}`} style={{background:c}} onClick={()=>setColor(c)} />
-              ))}
-            </div>
+            {fixedColor ? (
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:28,height:28,borderRadius:"50%",background:fixedColor,border:"2px solid #fff"}}/>
+                <span className="text-sm text-muted">Asignado automáticamente ✓</span>
+              </div>
+            ) : (
+              <div className="color-picker">
+                {USER_COLORS.map(c => (
+                  <div key={c} className={`color-dot ${color===c?"selected":""}`} style={{background:c}} onClick={()=>setColor(c)} />
+                ))}
+              </div>
+            )}
           </div>
         )}
         <button className="btn btn-primary w-full" style={{justifyContent:"center",padding:"12px",width:"100%"}}
@@ -1324,7 +1354,7 @@ const BookClubPage = ({ user, onToast }) => {
   const [spinResult, setSpinResult] = useState(null);
   const [spinPool, setSpinPool] = useState([]);
   const [proposalForm, setProposalForm] = useState({ title:"", author:"", units:"", unit:"pages" });
-  const [setupForm, setSetupForm] = useState({ days:"21" });
+  const [setupForm, setSetupForm] = useState({ days:"21", unit:"" }); // unit "" means inherit from book
   const [finishForm, setFinishForm] = useState({ rating:0, comment:"" });
   const [editMilestoneForm, setEditMilestoneForm] = useState({ date:"", goal:"" });
   const [noteText, setNoteText] = useState("");
@@ -1373,14 +1403,13 @@ const BookClubPage = ({ user, onToast }) => {
 
   const handlePropose = async () => {
     if (!proposalForm.title.trim() || !proposalForm.units) return onToast(`Pon título y número de ${unitLabel(proposalForm.unit)}`,"error");
-    if (myProposal && myProposal.status !== "pending") {
+    if (myProposal) {
+      // Can always edit title/author/units/unit — whether proposed or pending
       await updateDoc(doc(db,"bookclubProposals",myProposal.id), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), units:Number(proposalForm.units), unit:proposalForm.unit });
       onToast("Propuesta actualizada");
-    } else if (!myProposal) {
+    } else {
       await addDoc(collection(db,"bookclubProposals"), { title:proposalForm.title.trim(), author:proposalForm.author.trim(), units:Number(proposalForm.units), unit:proposalForm.unit, proposedBy:user.uid, proposedByName:user.displayName, status:"proposed", createdAt:serverTimestamp() });
       onToast("Libro propuesto");
-    } else {
-      return onToast("Tu libro ya está en espera de turno, no se puede editar ahora","error");
     }
     setShowPropose(false); setProposalForm({ title:"", author:"", units:"", unit:"pages" });
   };
@@ -1416,7 +1445,8 @@ const BookClubPage = ({ user, onToast }) => {
     if (!days || days < 1) return onToast("Pon un número de días válido","error");
     const start = new Date();
     const end = new Date(); end.setDate(start.getDate() + days);
-    const unit = spinResult.unit || "pages";
+    // setupForm.unit overrides the book's unit if the user wants to switch; fallback to book's unit
+    const unit = setupForm.unit || spinResult.unit || "pages";
     const milestones = generateMilestones(spinResult.units, start, end, unit);
     const bookKey = `${spinResult.id}-${Date.now()}`;
 
@@ -1663,9 +1693,9 @@ const BookClubPage = ({ user, onToast }) => {
           <div style={{marginTop:20,display:"flex",gap:10,flexWrap:"wrap"}}>
             {!myProposal ? (
               <button className="btn btn-primary" onClick={()=>setShowPropose(true)}>+ Proponer mi libro</button>
-            ) : myProposal.status !== "pending" ? (
+            ) : (
               <button className="btn btn-ghost" onClick={()=>{setProposalForm({title:myProposal.title,author:myProposal.author||"",units:String(myProposal.units),unit:myProposal.unit||"pages"});setShowPropose(true);}}>Editar mi propuesta</button>
-            ) : null}
+            )}
           </div>
 
           {canDraw && (
@@ -1756,12 +1786,30 @@ const BookClubPage = ({ user, onToast }) => {
         <Modal title="Organizar la lectura" onClose={()=>setShowSetup(false)}>
           <div className="card card-sm" style={{marginBottom:18,background:"var(--bg3)"}}>
             <div className="font-medium">{spinResult.title}</div>
-            <div className="text-xs text-muted mt-1">{spinResult.units} {unitLabel(spinResult.unit)}</div>
+            <div className="text-xs text-muted mt-1">{spinResult.units} {unitLabel(spinResult.unit)} · propuesto por {spinResult.proposedByName}</div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">¿Dividir el progreso por?</label>
+            <div style={{display:"flex",gap:8}}>
+              {[{v:"pages",l:"Páginas"},{v:"chapters",l:"Capítulos"}].map(({v,l}) => {
+                const active = (setupForm.unit || spinResult.unit || "pages") === v;
+                return (
+                  <div key={v} onClick={()=>setSetupForm(f=>({...f,unit:v}))}
+                    style={{flex:1,textAlign:"center",padding:"9px 14px",borderRadius:8,cursor:"pointer",fontSize:13,
+                      background:active?"var(--accent-bg)":"var(--bg3)",
+                      border:`1px solid ${active?"var(--accent)":"var(--border)"}`,
+                      color:active?"var(--accent)":"var(--text2)"}}>
+                    {l}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-xs text-muted mt-2">El libro tiene {spinResult.units} {unitLabel(setupForm.unit || spinResult.unit || "pages")} — podéis cambiarlo a la otra unidad si preferís.</div>
           </div>
           <div className="form-group">
             <label className="form-label">¿En cuántos días lo leéis?</label>
             <input className="form-input" type="number" min="1" value={setupForm.days} onChange={e=>setSetupForm(f=>({...f,days:e.target.value}))} />
-            <div className="text-xs text-muted mt-2">Se generarán plazos automáticos repartiendo los {unitLabel(spinResult.unit)}. Podréis ajustar cada hito a mano luego.</div>
+            <div className="text-xs text-muted mt-2">Se generarán plazos automáticos. Podréis ajustar cada hito a mano luego.</div>
           </div>
           <div className="modal-footer">
             <button className="btn btn-ghost" onClick={()=>setShowSetup(false)}>Cancelar</button>
@@ -1935,11 +1983,16 @@ const BottomNav = ({ user, page, onNavigate }) => {
 // ─── App Shell ────────────────────────────────────────────────────────────────
 const AuthedApp = ({ user }) => {
   const { toasts, show: toast } = useToast();
-  const [page, setPage] = useState("search");
+  // Restore last top-level page from localStorage (subpages furniture/items need room context so we don't persist those)
+  const savedPage = localStorage.getItem("casa_page");
+  const initialPage = (savedPage && !["furniture","items"].includes(savedPage)) ? savedPage : "search";
+  const [page, setPage] = useState(initialPage);
   const [navState, setNavState] = useState({});
 
   const navigate = (p, room, furniture) => {
     setPage(p);
+    // Only persist top-level pages — furniture/items depend on room context that doesn't survive reload
+    if (!["furniture","items"].includes(p)) localStorage.setItem("casa_page", p);
     if (room) setNavState(s=>({...s,room}));
     if (furniture) setNavState(s=>({...s,furniture}));
   };
