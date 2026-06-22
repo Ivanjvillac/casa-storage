@@ -2073,6 +2073,14 @@ const AuthedApp = ({ user }) => {
   const [page, setPage] = useState(initialPage);
   const [navState, setNavState] = useState({});
 
+  // Auto-fix color: if the user's name matches a known nickname but their photoURL doesn't match the fixed color, update it silently
+  useEffect(() => {
+    const fixedColor = colorForName(user.displayName);
+    if (fixedColor && user.photoURL !== fixedColor) {
+      updateProfile(user, { photoURL: fixedColor }).catch(() => {});
+    }
+  }, [user]);
+
   const navigate = (p, room, furniture) => {
     setPage(p);
     // Only persist top-level pages — furniture/items depend on room context that doesn't survive reload
